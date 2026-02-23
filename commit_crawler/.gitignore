@@ -1,6 +1,8 @@
 __pycache__/
 repo/
-json/
+
+# json/
+
 merged_git_logs.json
 *.txt
 !input.txt
