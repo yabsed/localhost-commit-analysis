@@ -16,7 +16,7 @@ This runs the full pipeline:
 
 - crawl: `input.txt -> commit_crawler/repo/<owner>/<repo>.txt` (remote 기준)
 - crawl(local): `input.txt -> commit_crawler/repo/_local/<repo>.txt`
-- merge: `*.txt -> commit_crawler/json/<input파일명>/merged_git_logs_YYYYMMDD_HHMMSS.json`
+- merge: `*.txt -> commit_crawler/json/merged_git_logs_YYYYMMDD_HHMMSS.json`
 
 If a target `.txt` already exists, crawler reuses it and skips clone/log fetch.
 Use `--force` to refresh.

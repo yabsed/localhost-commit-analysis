@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -43,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         "--output-json",
         type=Path,
         default=None,
-        help="Merged JSON output file path. If omitted, auto-save under --json-dir/<input-stem>/.",
+        help="Merged JSON output file path. If omitted, auto-save directly under --json-dir.",
     )
     parser.add_argument(
         "--json-dir",
@@ -75,15 +74,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def sanitize_name(name: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
-    return cleaned or "input"
-
-
-def default_output_json_path(json_dir: Path, input_path: Path) -> Path:
-    bucket = json_dir / sanitize_name(input_path.stem or input_path.name)
+def default_output_json_path(json_dir: Path) -> Path:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return bucket / f"merged_git_logs_{stamp}.json"
+    return json_dir / f"merged_git_logs_{stamp}.json"
 
 
 def run_step(cmd: list[str], step_name: str) -> None:
@@ -111,7 +104,7 @@ def main() -> None:
     if args.output_json is not None:
         output_json = args.output_json.resolve()
     else:
-        output_json = default_output_json_path(json_dir, input_path)
+        output_json = default_output_json_path(json_dir)
 
     with tempfile.TemporaryDirectory(prefix="commit_crawler_pipeline_") as temp_dir:
         manifest_path = Path(temp_dir) / "crawl_manifest.json"
