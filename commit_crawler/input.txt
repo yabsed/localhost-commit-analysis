@@ -1,0 +1,17 @@
+# One repository per line.
+# Recommended: remote GitHub repository URLs.
+#
+# Supported remote formats:
+# - https://github.com/owner/repo.git
+# - https://github.com/owner/repo
+# - owner/repo
+#
+# Local paths are also supported for compatibility.
+#
+# Example:
+# https://github.com/jangjinuite/aicupid-frontend.git
+# jangjinuite/aicupid-backend
+
+
+jangjinuite/aicupid-frontend
+koreasuminkim/AiCupid-backend
