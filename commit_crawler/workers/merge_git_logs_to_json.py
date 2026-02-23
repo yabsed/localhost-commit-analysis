@@ -23,6 +23,7 @@ COMMIT_START_RE = re.compile(r"^commit (?P<hash>[0-9a-f]{40})\n", re.MULTILINE)
 
 def parse_args() -> argparse.Namespace:
     script_dir = Path(__file__).resolve().parent
+    project_dir = script_dir.parent
     parser = argparse.ArgumentParser(
         description="Merge git log text files into one chronological JSON file."
     )
@@ -35,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         "-o",
         "--output",
         type=Path,
-        default=script_dir / "merged_git_logs.json",
+        default=project_dir / "merged_git_logs.json",
         help="Output JSON path (default: commit_crawler/merged_git_logs.json)",
     )
     parser.add_argument(
