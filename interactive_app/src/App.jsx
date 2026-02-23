@@ -21,6 +21,7 @@ import {
 import {
   Bar,
   BarChart,
+  Cell,
   CartesianGrid,
   Line,
   LineChart,
@@ -117,8 +118,11 @@ function StackedTooltip({
   }
 
   const normalized = payload
-    .filter((item) => Number(item.value) > 0)
-    .sort((a, b) => Number(b.value) - Number(a.value));
+    .filter((item) => {
+      const value = Number(item.value);
+      return Number.isFinite(value) && value !== 0;
+    })
+    .sort((a, b) => Math.abs(Number(b.value)) - Math.abs(Number(a.value)));
 
   return (
     <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
@@ -334,7 +338,7 @@ function buildProjectTrendSeries(projects, lineRows, authors) {
   return projects.map((project, index) => {
     const row = lineRows.find((item) => item.projectId === project.id);
     let topAuthorKey = null;
-    let topLineCount = -1;
+    let topLineCount = Number.NEGATIVE_INFINITY;
 
     for (const author of authors) {
       const lineCount = Number(row?.[author.key]) || 0;
@@ -437,23 +441,22 @@ function buildPercentTrendRows(
     };
 
     if (trendScope === 'byProject') {
-      const positiveByProjectId = new Map();
-      let allProjectPositiveTotal = 0;
+      const netByProjectId = new Map();
+      let allProjectMagnitudeTotal = 0;
 
       for (const project of projects) {
         const authorTotals = totalsByProjectId.get(project.id);
-        const projectPositiveTotal = authors.reduce((sum, author) => {
-          const value = Number(authorTotals?.[author.key]) || 0;
-          return value > 0 ? sum + value : sum;
-        }, 0);
-        positiveByProjectId.set(project.id, projectPositiveTotal);
-        allProjectPositiveTotal += projectPositiveTotal;
+        const projectNetTotal = authors.reduce((sum, author) => (
+          sum + (Number(authorTotals?.[author.key]) || 0)
+        ), 0);
+        netByProjectId.set(project.id, projectNetTotal);
+        allProjectMagnitudeTotal += Math.abs(projectNetTotal);
       }
 
       for (const series of projectSeries) {
-        const projectPositiveTotal = Number(positiveByProjectId.get(series.id)) || 0;
-        row[series.key] = allProjectPositiveTotal > 0
-          ? (projectPositiveTotal / allProjectPositiveTotal) * 100
+        const projectNetTotal = Number(netByProjectId.get(series.id)) || 0;
+        row[series.key] = allProjectMagnitudeTotal > 0
+          ? (projectNetTotal / allProjectMagnitudeTotal) * 100
           : 0;
       }
       return row;
@@ -465,28 +468,90 @@ function buildPercentTrendRows(
 
     for (const project of projects) {
       const authorTotals = totalsByProjectId.get(project.id);
-      const positiveTotal = authors.reduce((sum, author) => {
+      const magnitudeTotal = authors.reduce((sum, author) => {
         const value = Number(authorTotals?.[author.key]) || 0;
-        return value > 0 ? sum + value : sum;
+        return sum + Math.abs(value);
       }, 0);
-      if (positiveTotal <= 0) {
+      if (magnitudeTotal <= 0) {
         continue;
       }
 
       for (const authorLine of authorSeries) {
         const value = Number(authorTotals?.[authorLine.key]) || 0;
-        if (value > 0) {
-          row[authorLine.key] += (value / positiveTotal) * 100;
-        }
+        row[authorLine.key] += (value / magnitudeTotal) * 100;
       }
-    }
-
-    for (const authorLine of authorSeries) {
-      row[authorLine.key] = Math.max(0, Number(row[authorLine.key]) || 0);
     }
 
     return row;
   });
+}
+
+function buildStackValueBounds(rows, authors) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(authors) || authors.length === 0) {
+    return { min: 0, max: 0 };
+  }
+
+  let min = 0;
+  let max = 0;
+
+  for (const row of rows) {
+    let positiveTotal = 0;
+    let negativeTotal = 0;
+
+    for (const author of authors) {
+      const value = Number(row?.[author.key]) || 0;
+      if (value > 0) {
+        positiveTotal += value;
+      } else if (value < 0) {
+        negativeTotal += value;
+      }
+    }
+
+    if (positiveTotal > max) {
+      max = positiveTotal;
+    }
+    if (negativeTotal < min) {
+      min = negativeTotal;
+    }
+  }
+
+  return { min, max };
+}
+
+function buildStackEdgeByRow(rows, authors) {
+  return rows.map((row) => {
+    let positiveEndKey = null;
+    let negativeEndKey = null;
+
+    for (const author of authors) {
+      const value = Number(row?.[author.key]) || 0;
+      if (value > 0) {
+        positiveEndKey = author.key;
+      }
+      if (value < 0) {
+        negativeEndKey = author.key;
+      }
+    }
+
+    return {
+      positiveEndKey,
+      negativeEndKey,
+    };
+  });
+}
+
+function getStackBarCellRadius(value, edgeByRow, authorKey) {
+  if (!edgeByRow || !authorKey || !Number.isFinite(value) || value === 0) {
+    return [0, 0, 0, 0];
+  }
+
+  if (value > 0 && edgeByRow.positiveEndKey === authorKey) {
+    return [4, 4, 0, 0];
+  }
+  if (value < 0 && edgeByRow.negativeEndKey === authorKey) {
+    return [0, 0, 4, 4];
+  }
+  return [0, 0, 0, 0];
 }
 
 function findNearestNodeIndex(nodes, targetY) {
@@ -816,26 +881,24 @@ export default function App() {
       return [0, max];
     }
 
-    const totals = fullLineRows.map((row) => Number(row.total) || 0);
-    const min = Math.min(0, ...totals);
-    const max = Math.max(0, ...totals);
+    const { min, max } = buildStackValueBounds(fullLineRows, authors);
 
     if (min === max) {
       return [min - 1, max + 1];
     }
     return [min, max];
-  }, [fullLineRows, subtractDeletions]);
+  }, [fullLineRows, subtractDeletions, authors]);
 
   const linePercentRows = useMemo(() => {
     const baseRows = cumulativeRows.lineRows ?? [];
 
     return baseRows.map((row) => {
-      const positiveTotal = authors.reduce((sum, author) => {
+      const magnitudeTotal = authors.reduce((sum, author) => {
         const value = Number(row[author.key]) || 0;
-        return value > 0 ? sum + value : sum;
+        return sum + Math.abs(value);
       }, 0);
 
-      if (!Number.isFinite(positiveTotal) || positiveTotal <= 0) {
+      if (!Number.isFinite(magnitudeTotal) || magnitudeTotal <= 0) {
         const emptyRow = {
           projectId: row.projectId,
           projectLabel: row.projectLabel,
@@ -855,13 +918,19 @@ export default function App() {
 
       for (const author of authors) {
         const value = Number(row[author.key]) || 0;
-        nextRow[author.key] = value > 0 ? (value / positiveTotal) * 100 : 0;
+        nextRow[author.key] = (value / magnitudeTotal) * 100;
       }
       return nextRow;
     });
   }, [cumulativeRows.lineRows, authors]);
 
-  const linePercentAxisDomain = useMemo(() => [0, 100], []);
+  const linePercentAxisDomain = useMemo(() => {
+    const { min, max } = buildStackValueBounds(linePercentRows, authors);
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+    return [min, max];
+  }, [linePercentRows, authors]);
 
   const commitPercentRows = useMemo(() => {
     const baseRows = cumulativeRows.commitRows ?? [];
@@ -964,18 +1033,18 @@ export default function App() {
   const trendDomain = useMemo(() => {
     if (showProjectPercent) {
       if (activeTrendRows.length === 0) {
-        return [0, 100];
-      }
-
-      if (trendScope === 'byProject') {
-        return [0, 100];
+        return [-100, 100];
       }
 
       const values = activeTrendRows.flatMap((row) =>
-        activeTrendSeries.map((line) => Math.max(0, Number(row[line.key]) || 0))
+        activeTrendSeries.map((line) => Number(row[line.key]) || 0)
       );
+      const min = Math.min(0, ...values);
       const max = Math.max(0, ...values);
-      return [0, max > 0 ? max : 100];
+      if (min === max) {
+        return [min - 1, max + 1];
+      }
+      return [min, max];
     }
 
     if (activeTrendRows.length === 0) {
@@ -1006,6 +1075,10 @@ export default function App() {
   const activeStackRows = barChartMode === 'commits'
     ? (isCommitPercentMode ? commitPercentRows : cumulativeRows.commitRows)
     : (showProjectPercent ? linePercentRows : cumulativeRows.lineRows);
+  const stackEdgeByRow = useMemo(
+    () => buildStackEdgeByRow(activeStackRows ?? [], authors),
+    [activeStackRows, authors]
+  );
   const isLinePercentMode = barChartMode === 'lines' && showProjectPercent;
   const isPercentMode = isCommitPercentMode || isLinePercentMode;
   const activeStackUnit = barChartMode === 'commits'
@@ -1032,8 +1105,8 @@ export default function App() {
       : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)'));
   const trendDescription = showProjectPercent
     ? (trendScope === 'byProject'
-      ? '시간에 따른 레포별 기여도 비율(0~100%)입니다.'
-      : '시간에 따른 사용자별 기여도 합산 비율(레포별 비율 합)입니다.')
+      ? '시간에 따른 레포별 기여도 비율(부호 포함 %)입니다.'
+      : '시간에 따른 사용자별 기여도 합산 비율(부호 포함, 레포별 비율 합)입니다.')
     : (trendScope === 'byProject'
       ? `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`
       : `시간에 따른 사용자별 누적 ${trendUnitLabel}입니다.`);
@@ -1085,6 +1158,7 @@ export default function App() {
                 <Button
                   size="xs"
                   color="dark"
+                  radius={0}
                   variant={barChartMode === 'commits' ? 'filled' : 'default'}
                   onClick={() => setBarChartMode('commits')}
                 >
@@ -1093,6 +1167,7 @@ export default function App() {
                 <Button
                   size="xs"
                   color="dark"
+                  radius={0}
                   variant={barChartMode === 'lines' ? 'filled' : 'default'}
                   onClick={() => setBarChartMode('lines')}
                 >
@@ -1105,6 +1180,7 @@ export default function App() {
                 <Checkbox
                   size="sm"
                   color="dark"
+                  radius={0}
                   checked={showProjectPercent}
                   onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
                   label="레포 기여율(%)"
@@ -1112,6 +1188,7 @@ export default function App() {
                 <Checkbox
                   size="sm"
                   color="dark"
+                  radius={0}
                   checked={excludeTopLongCommits}
                   onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
                   label="긴 커밋 제외(상위 10%)"
@@ -1119,6 +1196,7 @@ export default function App() {
                 <Checkbox
                   size="sm"
                   color="dark"
+                  radius={0}
                   checked={subtractDeletions}
                   onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
                   label={barChartMode === 'commits' ? '0줄 변경 커밋 제외' : '순변경으로 계산(+/-)'}
@@ -1127,7 +1205,11 @@ export default function App() {
             </div>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={activeStackRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <BarChart
+                  data={activeStackRows}
+                  stackOffset="sign"
+                  margin={{ top: 20, right: 10, left: 0, bottom: 10 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis dataKey="projectLabel" />
                   <YAxis
@@ -1153,8 +1235,21 @@ export default function App() {
                       dataKey={author.key}
                       stackId={barChartMode}
                       fill={author.color}
-                      radius={[4, 4, 0, 0]}
-                    />
+                    >
+                      {activeStackRows.map((row, index) => {
+                        const value = Number(row?.[author.key]) || 0;
+                        return (
+                          <Cell
+                            key={`${author.key}-${row?.projectId ?? row?.projectLabel ?? index}`}
+                            radius={getStackBarCellRadius(
+                              value,
+                              stackEdgeByRow[index],
+                              author.key
+                            )}
+                          />
+                        );
+                      })}
+                    </Bar>
                   ))}
                 </BarChart>
               </ResponsiveContainer>
@@ -1219,7 +1314,7 @@ export default function App() {
                     formatter={(value, name) => {
                       return [
                         showProjectPercent
-                          ? `${Math.max(0, Number(value) || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                          ? `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
                           : formatNumber(value),
                         name,
                       ];
