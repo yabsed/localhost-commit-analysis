@@ -7,6 +7,9 @@
   --text-main: #111111;
   --text-soft: #626262;
   --lane: rgba(24, 24, 24, 0.24);
+  --app-gap: clamp(8px, 1.1vw, 14px);
+  --app-pad: clamp(8px, 1.1vw, 14px);
+  --chart-height: clamp(220px, 34vh, 330px);
 }
 
 * {
@@ -18,6 +21,7 @@ body,
 #root {
   width: 100%;
   height: 100%;
+  min-height: 100%;
   margin: 0;
   padding: 0;
 }
@@ -33,16 +37,18 @@ body {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(350px, 37%) 1fr;
-  gap: 14px;
+  grid-template-columns: minmax(320px, 37%) minmax(0, 1fr);
+  gap: var(--app-gap);
   width: 100%;
   height: 100%;
-  padding: 14px;
+  min-height: 100%;
+  padding: var(--app-pad);
 }
 
 .left-pane,
 .right-pane {
   min-height: 0;
+  min-width: 0;
 }
 
 .pane-scroll {
@@ -75,7 +81,7 @@ body {
 
 .chart-wrap {
   width: 100%;
-  height: 310px;
+  height: var(--chart-height);
   margin-top: 8px;
 }
 
@@ -164,8 +170,17 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 8px;
+}
+
+.timeline-head > :first-child {
+  min-width: 0;
+}
+
+.timeline-head .mantine-Group-root {
+  max-width: 100%;
 }
 
 .edge-legend {
@@ -178,6 +193,14 @@ body {
 
 .selected-commit-box {
   background: #ffffff;
+}
+
+.selected-commit-box .mantine-Text-root:nth-of-type(2) {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .timeline-scroll {
@@ -306,11 +329,30 @@ body {
 @media (max-width: 1160px) {
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: 46% 54%;
+    grid-template-rows: auto auto;
+    height: auto;
+    min-height: 100%;
   }
 
-  .left-pane {
+  .pane-scroll {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .right-pane {
+    height: auto;
     min-height: 0;
+  }
+
+  .timeline-card {
+    height: auto;
+  }
+
+  .timeline-scroll {
+    min-height: clamp(300px, 46vh, 560px);
+    max-height: 65vh;
   }
 
   .author-legend {
@@ -319,6 +361,15 @@ body {
 }
 
 @media (max-width: 780px) {
+  :root {
+    --chart-height: clamp(210px, 36vh, 280px);
+  }
+
+  .timeline-scroll {
+    min-height: clamp(240px, 40vh, 460px);
+    max-height: 60vh;
+  }
+
   .author-legend {
     grid-template-columns: 1fr;
   }
@@ -333,5 +384,21 @@ body {
 
   .edge-legend {
     justify-content: flex-start;
+  }
+}
+
+@media (max-height: 780px) {
+  :root {
+    --chart-height: clamp(180px, 31vh, 250px);
+  }
+
+  .stack-chart-copy,
+  .stack-chart-description {
+    min-height: 0;
+  }
+
+  .app-shell {
+    gap: 8px;
+    padding: 8px;
   }
 }
