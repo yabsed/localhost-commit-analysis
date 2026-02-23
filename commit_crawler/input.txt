@@ -13,6 +13,6 @@
 # https://github.com/jangjinuite/aicupid-frontend.git
 # jangjinuite/aicupid-backend
 
-
-jangjinuite/aicupid-frontend
-koreasuminkim/AiCupid-backend
+https://github.com/moim-ing/wackathon-frontend
+https://github.com/moim-ing/wackathon-backend
+https://github.com/moim-ing/wackathon-data

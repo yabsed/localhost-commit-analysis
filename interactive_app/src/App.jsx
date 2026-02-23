@@ -9,6 +9,7 @@ import {
   Loader,
   Modal,
   Paper,
+  Select,
   Stack,
   Text,
   Textarea,
@@ -20,6 +21,7 @@ import {
 import {
   Bar,
   BarChart,
+  Cell,
   CartesianGrid,
   Line,
   LineChart,
@@ -116,8 +118,11 @@ function StackedTooltip({
   }
 
   const normalized = payload
-    .filter((item) => Number(item.value) > 0)
-    .sort((a, b) => Number(b.value) - Number(a.value));
+    .filter((item) => {
+      const value = Number(item.value);
+      return Number.isFinite(value) && value !== 0;
+    })
+    .sort((a, b) => Math.abs(Number(b.value)) - Math.abs(Number(a.value)));
 
   return (
     <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
@@ -333,7 +338,7 @@ function buildProjectTrendSeries(projects, lineRows, authors) {
   return projects.map((project, index) => {
     const row = lineRows.find((item) => item.projectId === project.id);
     let topAuthorKey = null;
-    let topLineCount = -1;
+    let topLineCount = Number.NEGATIVE_INFINITY;
 
     for (const author of authors) {
       const lineCount = Number(row?.[author.key]) || 0;
@@ -436,23 +441,22 @@ function buildPercentTrendRows(
     };
 
     if (trendScope === 'byProject') {
-      const positiveByProjectId = new Map();
-      let allProjectPositiveTotal = 0;
+      const netByProjectId = new Map();
+      let allProjectMagnitudeTotal = 0;
 
       for (const project of projects) {
         const authorTotals = totalsByProjectId.get(project.id);
-        const projectPositiveTotal = authors.reduce((sum, author) => {
-          const value = Number(authorTotals?.[author.key]) || 0;
-          return value > 0 ? sum + value : sum;
-        }, 0);
-        positiveByProjectId.set(project.id, projectPositiveTotal);
-        allProjectPositiveTotal += projectPositiveTotal;
+        const projectNetTotal = authors.reduce((sum, author) => (
+          sum + (Number(authorTotals?.[author.key]) || 0)
+        ), 0);
+        netByProjectId.set(project.id, projectNetTotal);
+        allProjectMagnitudeTotal += Math.abs(projectNetTotal);
       }
 
       for (const series of projectSeries) {
-        const projectPositiveTotal = Number(positiveByProjectId.get(series.id)) || 0;
-        row[series.key] = allProjectPositiveTotal > 0
-          ? (projectPositiveTotal / allProjectPositiveTotal) * 100
+        const projectNetTotal = Number(netByProjectId.get(series.id)) || 0;
+        row[series.key] = allProjectMagnitudeTotal > 0
+          ? (projectNetTotal / allProjectMagnitudeTotal) * 100
           : 0;
       }
       return row;
@@ -464,28 +468,54 @@ function buildPercentTrendRows(
 
     for (const project of projects) {
       const authorTotals = totalsByProjectId.get(project.id);
-      const positiveTotal = authors.reduce((sum, author) => {
+      const magnitudeTotal = authors.reduce((sum, author) => {
         const value = Number(authorTotals?.[author.key]) || 0;
-        return value > 0 ? sum + value : sum;
+        return sum + Math.abs(value);
       }, 0);
-      if (positiveTotal <= 0) {
+      if (magnitudeTotal <= 0) {
         continue;
       }
 
       for (const authorLine of authorSeries) {
         const value = Number(authorTotals?.[authorLine.key]) || 0;
-        if (value > 0) {
-          row[authorLine.key] += (value / positiveTotal) * 100;
-        }
+        row[authorLine.key] += (value / magnitudeTotal) * 100;
       }
-    }
-
-    for (const authorLine of authorSeries) {
-      row[authorLine.key] = Math.max(0, Number(row[authorLine.key]) || 0);
     }
 
     return row;
   });
+}
+
+function buildStackValueBounds(rows, authors) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(authors) || authors.length === 0) {
+    return { min: 0, max: 0 };
+  }
+
+  let min = 0;
+  let max = 0;
+
+  for (const row of rows) {
+    let positiveTotal = 0;
+    let negativeTotal = 0;
+
+    for (const author of authors) {
+      const value = Number(row?.[author.key]) || 0;
+      if (value > 0) {
+        positiveTotal += value;
+      } else if (value < 0) {
+        negativeTotal += value;
+      }
+    }
+
+    if (positiveTotal > max) {
+      max = positiveTotal;
+    }
+    if (negativeTotal < min) {
+      min = negativeTotal;
+    }
+  }
+
+  return { min, max };
 }
 
 function findNearestNodeIndex(nodes, targetY) {
@@ -506,7 +536,11 @@ function findNearestNodeIndex(nodes, targetY) {
 export default function App() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [fileListLoading, setFileListLoading] = useState(true);
+  const [refreshingFileList, setRefreshingFileList] = useState(false);
   const [error, setError] = useState('');
+  const [logFiles, setLogFiles] = useState([]);
+  const [selectedLogFile, setSelectedLogFile] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
   const [focusLineY, setFocusLineY] = useState(0);
@@ -517,6 +551,7 @@ export default function App() {
   const [trendScope, setTrendScope] = useState('byProject');
   const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [isDataSourceModalOpen, setIsDataSourceModalOpen] = useState(false);
   const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
   const timelineScrollRef = useRef(null);
   const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
@@ -531,13 +566,63 @@ export default function App() {
     [draftIdentityRulesText]
   );
 
-  useEffect(() => {
-    let mounted = true;
+  const loadLogFiles = useCallback(async ({ preserveSelection = true, manual = false } = {}) => {
+    if (manual) {
+      setRefreshingFileList(true);
+    } else {
+      setFileListLoading(true);
+    }
 
+    try {
+      const res = await fetch('/api/commit-logs');
+      if (!res.ok) {
+        throw new Error(`파일 목록 로드 실패: ${res.status}`);
+      }
+
+      const data = await res.json();
+      const files = Array.isArray(data?.files) ? data.files : [];
+      setLogFiles(files);
+
+      if (files.length === 0) {
+        setSelectedLogFile(null);
+        setPayload(null);
+        setError('선택 가능한 JSON 파일이 없습니다. commit_crawler/json을 확인하세요.');
+        return;
+      }
+
+      setSelectedLogFile((current) => {
+        if (preserveSelection && current && files.some((item) => item.name === current)) {
+          return current;
+        }
+        return files[0].name;
+      });
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (manual) {
+        setRefreshingFileList(false);
+      } else {
+        setFileListLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLogFiles();
+  }, [loadLogFiles]);
+
+  useEffect(() => {
+    if (!selectedLogFile) {
+      setLoading(false);
+      return;
+    }
+
+    let mounted = true;
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch('/merged_git_logs.json');
+        const res = await fetch(`/api/commit-log?file=${encodeURIComponent(selectedLogFile)}`);
         if (!res.ok) {
           throw new Error(`데이터 로드 실패: ${res.status}`);
         }
@@ -561,7 +646,20 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [selectedLogFile]);
+
+  const selectedLogFileMeta = useMemo(
+    () => logFiles.find((item) => item.name === selectedLogFile) ?? null,
+    [logFiles, selectedLogFile]
+  );
+
+  const logFileOptions = useMemo(
+    () => logFiles.map((item) => ({
+      value: item.name,
+      label: item.name,
+    })),
+    [logFiles]
+  );
 
   const prepared = useMemo(() => {
     if (!payload) {
@@ -681,7 +779,10 @@ export default function App() {
       });
     };
 
-    updateVisibleCount();
+    // Start at the latest commit by default when a timeline is loaded.
+    scrollElement.scrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+    applySelection(timeline.nodes, timeline.nodes.length - 1);
+
     scrollElement.addEventListener('scroll', scheduleUpdate, { passive: true });
     window.addEventListener('resize', scheduleUpdate);
 
@@ -744,26 +845,24 @@ export default function App() {
       return [0, max];
     }
 
-    const totals = fullLineRows.map((row) => Number(row.total) || 0);
-    const min = Math.min(0, ...totals);
-    const max = Math.max(0, ...totals);
+    const { min, max } = buildStackValueBounds(fullLineRows, authors);
 
     if (min === max) {
       return [min - 1, max + 1];
     }
     return [min, max];
-  }, [fullLineRows, subtractDeletions]);
+  }, [fullLineRows, subtractDeletions, authors]);
 
   const linePercentRows = useMemo(() => {
     const baseRows = cumulativeRows.lineRows ?? [];
 
     return baseRows.map((row) => {
-      const positiveTotal = authors.reduce((sum, author) => {
+      const magnitudeTotal = authors.reduce((sum, author) => {
         const value = Number(row[author.key]) || 0;
-        return value > 0 ? sum + value : sum;
+        return sum + Math.abs(value);
       }, 0);
 
-      if (!Number.isFinite(positiveTotal) || positiveTotal <= 0) {
+      if (!Number.isFinite(magnitudeTotal) || magnitudeTotal <= 0) {
         const emptyRow = {
           projectId: row.projectId,
           projectLabel: row.projectLabel,
@@ -783,13 +882,19 @@ export default function App() {
 
       for (const author of authors) {
         const value = Number(row[author.key]) || 0;
-        nextRow[author.key] = value > 0 ? (value / positiveTotal) * 100 : 0;
+        nextRow[author.key] = (value / magnitudeTotal) * 100;
       }
       return nextRow;
     });
   }, [cumulativeRows.lineRows, authors]);
 
-  const linePercentAxisDomain = useMemo(() => [0, 100], []);
+  const linePercentAxisDomain = useMemo(() => {
+    const { min, max } = buildStackValueBounds(linePercentRows, authors);
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+    return [min, max];
+  }, [linePercentRows, authors]);
 
   const commitPercentRows = useMemo(() => {
     const baseRows = cumulativeRows.commitRows ?? [];
@@ -892,18 +997,18 @@ export default function App() {
   const trendDomain = useMemo(() => {
     if (showProjectPercent) {
       if (activeTrendRows.length === 0) {
-        return [0, 100];
-      }
-
-      if (trendScope === 'byProject') {
-        return [0, 100];
+        return [-100, 100];
       }
 
       const values = activeTrendRows.flatMap((row) =>
-        activeTrendSeries.map((line) => Math.max(0, Number(row[line.key]) || 0))
+        activeTrendSeries.map((line) => Number(row[line.key]) || 0)
       );
+      const min = Math.min(0, ...values);
       const max = Math.max(0, ...values);
-      return [0, max > 0 ? max : 100];
+      if (min === max) {
+        return [min - 1, max + 1];
+      }
+      return [min, max];
     }
 
     if (activeTrendRows.length === 0) {
@@ -960,8 +1065,8 @@ export default function App() {
       : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)'));
   const trendDescription = showProjectPercent
     ? (trendScope === 'byProject'
-      ? '시간에 따른 레포별 기여도 비율(0~100%)입니다.'
-      : '시간에 따른 사용자별 기여도 합산 비율(레포별 비율 합)입니다.')
+      ? '시간에 따른 레포별 기여도 비율(부호 포함 %)입니다.'
+      : '시간에 따른 사용자별 기여도 합산 비율(부호 포함, 레포별 비율 합)입니다.')
     : (trendScope === 'byProject'
       ? `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`
       : `시간에 따른 사용자별 누적 ${trendUnitLabel}입니다.`);
@@ -969,7 +1074,7 @@ export default function App() {
   const ignoredRuleCount = identityRules.invalidLines.length;
   const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
 
-  if (loading) {
+  if (loading || fileListLoading) {
     return (
       <div className="center-screen">
         <Loader color="dark" size="lg" />
@@ -1013,6 +1118,7 @@ export default function App() {
                 <Button
                   size="xs"
                   color="dark"
+                  radius={0}
                   variant={barChartMode === 'commits' ? 'filled' : 'default'}
                   onClick={() => setBarChartMode('commits')}
                 >
@@ -1021,6 +1127,7 @@ export default function App() {
                 <Button
                   size="xs"
                   color="dark"
+                  radius={0}
                   variant={barChartMode === 'lines' ? 'filled' : 'default'}
                   onClick={() => setBarChartMode('lines')}
                 >
@@ -1033,6 +1140,7 @@ export default function App() {
                 <Checkbox
                   size="sm"
                   color="dark"
+                  radius={0}
                   checked={showProjectPercent}
                   onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
                   label="레포 기여율(%)"
@@ -1040,6 +1148,7 @@ export default function App() {
                 <Checkbox
                   size="sm"
                   color="dark"
+                  radius={0}
                   checked={excludeTopLongCommits}
                   onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
                   label="긴 커밋 제외(상위 10%)"
@@ -1047,6 +1156,7 @@ export default function App() {
                 <Checkbox
                   size="sm"
                   color="dark"
+                  radius={0}
                   checked={subtractDeletions}
                   onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
                   label={barChartMode === 'commits' ? '0줄 변경 커밋 제외' : '순변경으로 계산(+/-)'}
@@ -1055,7 +1165,11 @@ export default function App() {
             </div>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={activeStackRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <BarChart
+                  data={activeStackRows}
+                  stackOffset="sign"
+                  margin={{ top: 20, right: 10, left: 0, bottom: 10 }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis dataKey="projectLabel" />
                   <YAxis
@@ -1081,8 +1195,16 @@ export default function App() {
                       dataKey={author.key}
                       stackId={barChartMode}
                       fill={author.color}
-                      radius={[4, 4, 0, 0]}
-                    />
+                    >
+                      {activeStackRows.map((row, index) => {
+                        return (
+                          <Cell
+                            key={`${author.key}-${row?.projectId ?? row?.projectLabel ?? index}`}
+                            radius={[4, 4, 4, 4]}
+                          />
+                        );
+                      })}
+                    </Bar>
                   ))}
                 </BarChart>
               </ResponsiveContainer>
@@ -1147,7 +1269,7 @@ export default function App() {
                     formatter={(value, name) => {
                       return [
                         showProjectPercent
-                          ? `${Math.max(0, Number(value) || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                          ? `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
                           : formatNumber(value),
                         name,
                       ];
@@ -1186,6 +1308,14 @@ export default function App() {
               {ignoredRuleCount > 0 && (
                 <Badge color="gray" variant="light">무시된 규칙 {ignoredRuleCount}개</Badge>
               )}
+              <Button
+                size="xs"
+                color="dark"
+                variant="default"
+                onClick={() => setIsDataSourceModalOpen(true)}
+              >
+                데이터 소스
+              </Button>
               <Button
                 size="xs"
                 color="dark"
@@ -1341,8 +1471,68 @@ export default function App() {
               })}
             </svg>
           </div>
+
+          <Paper withBorder radius="md" p="sm" mt="sm" className="legend-card">
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700} mb={6}>
+              Author Color Map
+            </Text>
+            <div className="author-legend">
+              {authors.map((author) => (
+                <div key={`timeline-author-legend-${author.key}`} className="legend-item">
+                  <span
+                    className="swatch"
+                    style={{ backgroundColor: author.color }}
+                    aria-hidden="true"
+                  />
+                  <Text size="sm" fw={600}>{author.displayName}</Text>
+                  <Text size="xs" c="dimmed">{author.color}</Text>
+                </div>
+              ))}
+            </div>
+          </Paper>
         </Paper>
       </section>
+
+      <Modal
+        opened={isDataSourceModalOpen}
+        onClose={() => setIsDataSourceModalOpen(false)}
+        title="데이터 소스 선택"
+        centered
+        size="md"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            `commit_crawler/json`에 있는 결과 파일 중 하나를 선택합니다.
+          </Text>
+          <Select
+            label="JSON 파일"
+            data={logFileOptions}
+            value={selectedLogFile}
+            onChange={(value) => setSelectedLogFile(value)}
+            searchable={false}
+            allowDeselect={false}
+            nothingFoundMessage="선택 가능한 파일이 없습니다."
+          />
+          {selectedLogFileMeta && (
+            <Text size="xs" c="dimmed">
+              수정 시각: {formatKoreanDateTime(selectedLogFileMeta.modifiedAtMs)}
+            </Text>
+          )}
+          <Group justify="space-between">
+            <Button
+              variant="default"
+              color="gray"
+              onClick={() => loadLogFiles({ preserveSelection: true, manual: true })}
+              loading={refreshingFileList}
+            >
+              목록 새로고침
+            </Button>
+            <Button color="dark" onClick={() => setIsDataSourceModalOpen(false)}>
+              닫기
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={isIdentityModalOpen}
