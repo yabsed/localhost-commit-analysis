@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -21,6 +21,8 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -34,6 +36,8 @@ import {
 } from './logData';
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
+const PROJECT_LINE_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const PROJECT_LINE_DASHES = ['', '6 4', '3 4', '10 4'];
 
 function splitIdentityRuleLine(line) {
   const source = String(line || '').trim();
@@ -205,6 +209,59 @@ function buildCumulativeRows(projects, authors, nodes, subtractDeletions = false
   };
 }
 
+function trendDelta(node, metric, subtractDeletions = false) {
+  if (metric === 'commits') {
+    return 1;
+  }
+  return subtractDeletions
+    ? (Number(node.additions) || 0) - (Number(node.deletions) || 0)
+    : Number(node.touchedLines) || 0;
+}
+
+function buildTrendRows(nodes, metric, subtractDeletions = false) {
+  let cumulative = 0;
+  return nodes.map((node, index) => {
+    const delta = trendDelta(node, metric, subtractDeletions);
+    cumulative += delta;
+    return {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+      cumulative,
+    };
+  });
+}
+
+function buildProjectTrendRows(nodes, projects, metric, subtractDeletions = false) {
+  const projectLines = projects.map((project, index) => ({
+    id: project.id,
+    label: project.label,
+    key: `project_line_${index}`,
+    stroke: PROJECT_LINE_STROKES[index % PROJECT_LINE_STROKES.length],
+    dash: PROJECT_LINE_DASHES[index % PROJECT_LINE_DASHES.length],
+  }));
+
+  const totalsByProjectId = Object.fromEntries(projectLines.map((line) => [line.id, 0]));
+  const rows = nodes.map((node, index) => {
+    const delta = trendDelta(node, metric, subtractDeletions);
+    totalsByProjectId[node.projectId] = (Number(totalsByProjectId[node.projectId]) || 0) + delta;
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+    };
+
+    for (const projectLine of projectLines) {
+      row[projectLine.key] = Number(totalsByProjectId[projectLine.id]) || 0;
+    }
+
+    return row;
+  });
+
+  return { rows, projectLines };
+}
+
 function findNearestNodeIndex(nodes, targetY) {
   let nearestIndex = 0;
   let nearestDistance = Number.POSITIVE_INFINITY;
@@ -228,6 +285,9 @@ export default function App() {
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
   const [focusLineY, setFocusLineY] = useState(0);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
+  const [barChartMode, setBarChartMode] = useState('commits');
+  const [trendMetric, setTrendMetric] = useState('commits');
+  const [trendScope, setTrendScope] = useState('combined');
   const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
@@ -279,7 +339,9 @@ export default function App() {
     if (!payload) {
       return null;
     }
-    return processLogData(payload, { identityPairs: identityRules.pairs });
+    return processLogData(payload, {
+      identityPairs: identityRules.pairs,
+    });
   }, [payload, identityRules]);
 
   const selectedNode = useMemo(() => {
@@ -304,20 +366,32 @@ export default function App() {
   const authorByKey = prepared?.authorByKey ?? {};
   const timeline = prepared?.timeline;
 
-  useEffect(() => {
-    if (!timeline?.nodes?.length) {
+  const applySelection = useCallback((nodes, selectedIndex) => {
+    if (!Array.isArray(nodes) || nodes.length === 0) {
       setVisibleNodeCount(0);
       setFocusLineY(0);
+      setSelectedId(null);
+      return;
+    }
+
+    const clampedIndex = Math.max(0, Math.min(nodes.length - 1, selectedIndex));
+    const selectedNode = nodes[clampedIndex];
+    const nextCount = clampedIndex + 1;
+
+    setVisibleNodeCount((prev) => (prev === nextCount ? prev : nextCount));
+    setFocusLineY((prev) => (prev === selectedNode.y ? prev : selectedNode.y));
+    setSelectedId((prev) => (prev === selectedNode.id ? prev : selectedNode.id));
+  }, []);
+
+  useEffect(() => {
+    if (!timeline?.nodes?.length) {
+      applySelection([], 0);
       return;
     }
 
     const scrollElement = timelineScrollRef.current;
     if (!scrollElement) {
-      const selectedIndex = timeline.nodes.length - 1;
-      const selectedNode = timeline.nodes[selectedIndex];
-      setVisibleNodeCount(selectedIndex + 1);
-      setFocusLineY(selectedNode?.y ?? 0);
-      setSelectedId((prev) => (prev === selectedNode?.id ? prev : selectedNode?.id ?? null));
+      applySelection(timeline.nodes, timeline.nodes.length - 1);
       return;
     }
 
@@ -325,18 +399,11 @@ export default function App() {
     let ticking = false;
 
     const updateVisibleCount = () => {
-      const viewportCenter = Math.round(
-        scrollElement.scrollTop + scrollElement.clientHeight / 2
-      );
-      const selectedIndex = findNearestNodeIndex(timeline.nodes, viewportCenter);
-      const selectedNode = timeline.nodes[selectedIndex];
-      const nextCount = selectedIndex + 1;
-      const nextSelectedId = selectedNode?.id ?? null;
-      const nextFocusLineY = selectedNode?.y ?? 0;
-
-      setVisibleNodeCount((prev) => (prev === nextCount ? prev : nextCount));
-      setFocusLineY((prev) => (prev === nextFocusLineY ? prev : nextFocusLineY));
-      setSelectedId((prev) => (prev === nextSelectedId ? prev : nextSelectedId));
+      const maxScrollTop = Math.max(1, scrollElement.scrollHeight - scrollElement.clientHeight);
+      const progress = Math.min(1, Math.max(0, scrollElement.scrollTop / maxScrollTop));
+      const targetY = scrollElement.scrollTop + scrollElement.clientHeight * progress;
+      const selectedIndex = findNearestNodeIndex(timeline.nodes, targetY);
+      applySelection(timeline.nodes, selectedIndex);
     };
 
     const scheduleUpdate = () => {
@@ -361,7 +428,7 @@ export default function App() {
       scrollElement.removeEventListener('scroll', scheduleUpdate);
       window.removeEventListener('resize', scheduleUpdate);
     };
-  }, [timeline]);
+  }, [applySelection, timeline]);
 
   const cumulativeRows = useMemo(() => {
     if (!timeline?.nodes?.length) {
@@ -400,6 +467,69 @@ export default function App() {
     return [min, max];
   }, [lineRows, netLineRows, subtractDeletions]);
 
+  const totalTrendRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return [];
+    }
+    return buildTrendRows(timeline.nodes, trendMetric, subtractDeletions);
+  }, [timeline, trendMetric, subtractDeletions]);
+
+  const projectTrend = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return { rows: [], projectLines: [] };
+    }
+    return buildProjectTrendRows(timeline.nodes, projects, trendMetric, subtractDeletions);
+  }, [timeline, projects, trendMetric, subtractDeletions]);
+
+  const activeTrendRows = trendScope === 'combined' ? totalTrendRows : projectTrend.rows;
+
+  const trendDomain = useMemo(() => {
+    if (activeTrendRows.length === 0) {
+      return [0, 1];
+    }
+
+    const values = trendScope === 'combined'
+      ? activeTrendRows.map((row) => Number(row.cumulative) || 0)
+      : activeTrendRows.flatMap((row) =>
+        projectTrend.projectLines.map((line) => Number(row[line.key]) || 0)
+      );
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+    return [min, max];
+  }, [activeTrendRows, trendScope, projectTrend.projectLines]);
+
+  const selectedTrendPoint = useMemo(() => {
+    if (activeTrendRows.length === 0) {
+      return null;
+    }
+    const index = Math.max(0, Math.min(activeTrendRows.length - 1, visibleNodeCount - 1));
+    return activeTrendRows[index];
+  }, [activeTrendRows, visibleNodeCount]);
+
+  const activeStackRows = barChartMode === 'commits' ? cumulativeRows.commitRows : cumulativeRows.lineRows;
+  const activeStackUnit = barChartMode === 'commits'
+    ? 'commit'
+    : (subtractDeletions ? 'net line' : 'line');
+  const activeStackTitle = barChartMode === 'commits'
+    ? '커밋 수 (프로젝트 x 작성자)'
+    : '라인 수 (프로젝트 x 작성자)';
+  const activeStackDescription = barChartMode === 'commits'
+    ? '타임라인 스크롤 위치까지의 누적 커밋 수입니다.'
+    : (subtractDeletions
+      ? '타임라인 스크롤 위치까지의 누적 순증가 라인(+에서 -를 뺀 값)입니다.'
+      : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.');
+  const activeStackDomain = barChartMode === 'commits' ? [0, commitAxisMax] : lineAxisDomain;
+  const trendUnitLabel = trendMetric === 'commits'
+    ? '커밋 수'
+    : (subtractDeletions ? '코드 길이(추가-삭제)' : '코드 길이(추가+삭제)');
+  const trendDescription = trendScope === 'combined'
+    ? `시간에 따른 누적 ${trendUnitLabel}입니다.`
+    : `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`;
+
   const ignoredRuleCount = identityRules.invalidLines.length;
   const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
 
@@ -436,23 +566,56 @@ export default function App() {
       <section className="left-pane">
         <div className="pane-scroll">
           <Card className="chart-card card-enter delay-2" radius="xl" p="lg" withBorder>
-            <Stack gap="xs">
-              <Title order={4}>커밋 수 (프로젝트 x 작성자)</Title>
-              <Text size="sm" c="dimmed">
-                타임라인 스크롤 위치까지의 누적 커밋 수입니다.
-              </Text>
-            </Stack>
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Stack gap="xs">
+                <Title order={4}>{activeStackTitle}</Title>
+                <Text size="sm" c="dimmed">
+                  {activeStackDescription}
+                </Text>
+              </Stack>
+              <Group gap="xs">
+                <Button
+                  size="xs"
+                  color="dark"
+                  variant={barChartMode === 'commits' ? 'filled' : 'default'}
+                  onClick={() => setBarChartMode('commits')}
+                >
+                  커밋 수
+                </Button>
+                <Button
+                  size="xs"
+                  color="dark"
+                  variant={barChartMode === 'lines' ? 'filled' : 'default'}
+                  onClick={() => setBarChartMode('lines')}
+                >
+                  라인 수
+                </Button>
+              </Group>
+            </Group>
+            {barChartMode === 'lines' && (
+              <Checkbox
+                mt="xs"
+                size="sm"
+                color="dark"
+                checked={subtractDeletions}
+                onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
+                label="삭제(-)를 빼서 보기"
+              />
+            )}
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={cumulativeRows.commitRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <BarChart data={activeStackRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis dataKey="projectLabel" />
-                  <YAxis allowDecimals={false} domain={[0, commitAxisMax]} />
+                  <YAxis allowDecimals={false} domain={activeStackDomain} />
+                  {barChartMode === 'lines' && subtractDeletions && (
+                    <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
+                  )}
                   <Tooltip
                     content={
                       <StackedTooltip
                         authorByKey={authorByKey}
-                        unitLabel="commit"
+                        unitLabel={activeStackUnit}
                       />
                     }
                   />
@@ -460,7 +623,7 @@ export default function App() {
                     <Bar
                       key={author.key}
                       dataKey={author.key}
-                      stackId="commit"
+                      stackId={barChartMode}
                       fill={author.color}
                       radius={[4, 4, 0, 0]}
                     />
@@ -473,48 +636,115 @@ export default function App() {
           <Card className="chart-card card-enter delay-3" radius="xl" p="lg" withBorder>
             <Group justify="space-between" align="flex-start" wrap="wrap">
               <Stack gap="xs">
-                <Title order={4}>라인 수 (프로젝트 x 작성자)</Title>
+                <Title order={4}>시간 추이</Title>
                 <Text size="sm" c="dimmed">
-                  {subtractDeletions
-                    ? '타임라인 스크롤 위치까지의 누적 순증가 라인(+에서 -를 뺀 값)입니다.'
-                    : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.'}
+                  {trendDescription}
                 </Text>
               </Stack>
+              <Stack gap="xs" align="flex-end">
+                <Group gap="xs">
+                  <Button
+                    size="xs"
+                    color="dark"
+                    variant={trendMetric === 'commits' ? 'filled' : 'default'}
+                    onClick={() => setTrendMetric('commits')}
+                  >
+                    커밋 수
+                  </Button>
+                  <Button
+                    size="xs"
+                    color="dark"
+                    variant={trendMetric === 'code' ? 'filled' : 'default'}
+                    onClick={() => setTrendMetric('code')}
+                  >
+                    코드 길이
+                  </Button>
+                </Group>
+                <Group gap="xs">
+                  <Button
+                    size="xs"
+                    color="dark"
+                    variant={trendScope === 'combined' ? 'filled' : 'default'}
+                    onClick={() => setTrendScope('combined')}
+                  >
+                    통합
+                  </Button>
+                  <Button
+                    size="xs"
+                    color="dark"
+                    variant={trendScope === 'byProject' ? 'filled' : 'default'}
+                    onClick={() => setTrendScope('byProject')}
+                  >
+                    레포별
+                  </Button>
+                </Group>
+              </Stack>
+            </Group>
+            {trendMetric === 'code' && (
               <Checkbox
+                mt="xs"
                 size="sm"
                 color="dark"
                 checked={subtractDeletions}
                 onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
                 label="삭제(-)를 빼서 보기"
               />
-            </Group>
+            )}
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={cumulativeRows.lineRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
-                  <XAxis dataKey="projectLabel" />
-                  <YAxis allowDecimals={false} domain={lineAxisDomain} />
-                  {subtractDeletions && (
+                  <XAxis
+                    dataKey="timestampMs"
+                    type="number"
+                    domain={['dataMin', 'dataMax']}
+                    tickFormatter={(value) => formatKoreanDateTime(value)}
+                    tickCount={6}
+                  />
+                  <YAxis allowDecimals={false} domain={trendDomain} />
+                  {trendMetric === 'code' && subtractDeletions && (
                     <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
                   )}
+                  {selectedTrendPoint && (
+                    <ReferenceLine x={selectedTrendPoint.timestampMs} stroke="#8f8f8f" strokeDasharray="4 4" />
+                  )}
                   <Tooltip
-                    content={
-                      <StackedTooltip
-                        authorByKey={authorByKey}
-                        unitLabel={subtractDeletions ? 'net line' : 'line'}
-                      />
-                    }
+                    labelFormatter={(value) => formatKoreanDateTime(value)}
+                    formatter={(value, name) => [
+                      formatNumber(value),
+                      trendScope === 'combined'
+                        ? (trendMetric === 'commits'
+                          ? '누적 커밋'
+                          : (subtractDeletions ? '누적 코드 길이(추가-삭제)' : '누적 코드 길이(추가+삭제)'))
+                        : name,
+                    ]}
                   />
-                  {authors.map((author) => (
-                    <Bar
-                      key={author.key}
-                      dataKey={author.key}
-                      stackId="line"
-                      fill={author.color}
-                      radius={[4, 4, 0, 0]}
+                  {trendScope === 'combined' ? (
+                    <Line
+                      type="monotone"
+                      name="전체 레포"
+                      dataKey="cumulative"
+                      stroke="#111111"
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                     />
-                  ))}
-                </BarChart>
+                  ) : (
+                    projectTrend.projectLines.map((projectLine) => (
+                      <Line
+                        key={projectLine.key}
+                        type="monotone"
+                        name={projectLine.label}
+                        dataKey={projectLine.key}
+                        stroke={projectLine.stroke}
+                        strokeDasharray={projectLine.dash}
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                    ))
+                  )}
+                </LineChart>
               </ResponsiveContainer>
             </div>
           </Card>
@@ -661,12 +891,12 @@ export default function App() {
                 </g>
               )}
 
-              {timeline.nodes.map((node) => {
+              {timeline.nodes.map((node, index) => {
                 const isSelected = selectedNode?.id === node.id;
                 return (
                   <g
                     key={node.id}
-                    onClick={() => setSelectedId(node.id)}
+                    onClick={() => applySelection(timeline.nodes, index)}
                     className={`timeline-node ${isSelected ? 'is-selected' : ''}`}
                   >
                     <circle

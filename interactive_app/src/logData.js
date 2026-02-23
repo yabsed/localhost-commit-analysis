@@ -253,18 +253,32 @@ export function processLogData(payload, options = {}) {
     parsedAuthor: parseAuthor(entry.author),
     lineStats: computeLineStats(entry.raw_text),
     timestampMs: parseTimestampMs(entry),
+    sourceOrder: entry.source_order ?? 0,
+    sourceCommitIndex: entry.source_commit_index ?? 0,
     title: extractCommitTitle(entry.raw_text),
   }));
 
+  preprocessedEntries.sort((a, b) => {
+    if (a.timestampMs !== b.timestampMs) {
+      return a.timestampMs - b.timestampMs;
+    }
+    if (a.sourceOrder !== b.sourceOrder) {
+      return a.sourceOrder - b.sourceOrder;
+    }
+    return a.sourceCommitIndex - b.sourceCommitIndex;
+  });
+
+  const filteredEntries = preprocessedEntries;
+
   // Warm-up pass: apply alias graph to every observed author first.
-  for (const item of preprocessedEntries) {
+  for (const item of filteredEntries) {
     resolveAuthorIdentity(item.parsedAuthor);
   }
-  for (const item of preprocessedEntries) {
+  for (const item of filteredEntries) {
     resolveAuthorIdentity(item.parsedAuthor);
   }
 
-  const normalizedNodes = preprocessedEntries.map((item) => {
+  const normalizedNodes = filteredEntries.map((item) => {
     const {
       entry,
       index,
@@ -498,7 +512,7 @@ export function processLogData(payload, options = {}) {
   });
 
   const timeline = {
-    width: laneStartX * 2 + (projects.length - 1) * laneSpacing,
+    width: laneStartX * 2 + Math.max(0, projects.length - 1) * laneSpacing,
     height: topPadding + timelineNodes.length * rowSpacing + bottomPadding,
     topPadding,
     lanes: projects.map((project) => laneByProject.get(project.id)),
