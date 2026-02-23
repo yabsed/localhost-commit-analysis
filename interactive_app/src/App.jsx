@@ -522,6 +522,7 @@ export default function App() {
   const [trendScope, setTrendScope] = useState('byProject');
   const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [isDataSourceModalOpen, setIsDataSourceModalOpen] = useState(false);
   const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
   const timelineScrollRef = useRef(null);
   const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
@@ -749,7 +750,10 @@ export default function App() {
       });
     };
 
-    updateVisibleCount();
+    // Start at the latest commit by default when a timeline is loaded.
+    scrollElement.scrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+    applySelection(timeline.nodes, timeline.nodes.length - 1);
+
     scrollElement.addEventListener('scroll', scheduleUpdate, { passive: true });
     window.addEventListener('resize', scheduleUpdate);
 
@@ -1258,6 +1262,14 @@ export default function App() {
                 size="xs"
                 color="dark"
                 variant="default"
+                onClick={() => setIsDataSourceModalOpen(true)}
+              >
+                데이터 소스
+              </Button>
+              <Button
+                size="xs"
+                color="dark"
+                variant="default"
                 onClick={() => {
                   setDraftIdentityRulesText(identityRulesText);
                   setIsIdentityModalOpen(true);
@@ -1288,41 +1300,6 @@ export default function App() {
                   {selectedNode.authorName}
                 </Badge>
               </Group>
-            )}
-          </Paper>
-
-          <Paper withBorder radius="md" p="sm" mb="sm" className="source-select-box">
-            <Group justify="space-between" align="flex-start" wrap="wrap">
-              <Stack gap={2}>
-                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Data Source</Text>
-                <Text size="sm" c="dimmed">
-                  `commit_crawler/json` 파일을 선택합니다.
-                </Text>
-              </Stack>
-              <Button
-                size="xs"
-                color="dark"
-                variant="default"
-                onClick={() => loadLogFiles({ preserveSelection: true, manual: true })}
-                loading={refreshingFileList}
-              >
-                목록 새로고침
-              </Button>
-            </Group>
-            <Select
-              mt="sm"
-              label="JSON 파일"
-              data={logFileOptions}
-              value={selectedLogFile}
-              onChange={(value) => setSelectedLogFile(value)}
-              searchable={false}
-              allowDeselect={false}
-              nothingFoundMessage="선택 가능한 파일이 없습니다."
-            />
-            {selectedLogFileMeta && (
-              <Text size="xs" c="dimmed" mt={6}>
-                수정 시각: {formatKoreanDateTime(selectedLogFileMeta.modifiedAtMs)}
-              </Text>
             )}
           </Paper>
 
@@ -1444,8 +1421,68 @@ export default function App() {
               })}
             </svg>
           </div>
+
+          <Paper withBorder radius="md" p="sm" mt="sm" className="legend-card">
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700} mb={6}>
+              Author Color Map
+            </Text>
+            <div className="author-legend">
+              {authors.map((author) => (
+                <div key={`timeline-author-legend-${author.key}`} className="legend-item">
+                  <span
+                    className="swatch"
+                    style={{ backgroundColor: author.color }}
+                    aria-hidden="true"
+                  />
+                  <Text size="sm" fw={600}>{author.displayName}</Text>
+                  <Text size="xs" c="dimmed">{author.color}</Text>
+                </div>
+              ))}
+            </div>
+          </Paper>
         </Paper>
       </section>
+
+      <Modal
+        opened={isDataSourceModalOpen}
+        onClose={() => setIsDataSourceModalOpen(false)}
+        title="데이터 소스 선택"
+        centered
+        size="md"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            `commit_crawler/json`에 있는 결과 파일 중 하나를 선택합니다.
+          </Text>
+          <Select
+            label="JSON 파일"
+            data={logFileOptions}
+            value={selectedLogFile}
+            onChange={(value) => setSelectedLogFile(value)}
+            searchable={false}
+            allowDeselect={false}
+            nothingFoundMessage="선택 가능한 파일이 없습니다."
+          />
+          {selectedLogFileMeta && (
+            <Text size="xs" c="dimmed">
+              수정 시각: {formatKoreanDateTime(selectedLogFileMeta.modifiedAtMs)}
+            </Text>
+          )}
+          <Group justify="space-between">
+            <Button
+              variant="default"
+              color="gray"
+              onClick={() => loadLogFiles({ preserveSelection: true, manual: true })}
+              loading={refreshingFileList}
+            >
+              목록 새로고침
+            </Button>
+            <Button color="dark" onClick={() => setIsDataSourceModalOpen(false)}>
+              닫기
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={isIdentityModalOpen}
