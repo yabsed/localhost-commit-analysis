@@ -37,9 +37,6 @@ import {
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
-const TREND_OVERLAP_BUCKET_DIGITS = 3;
-const TREND_OVERLAP_STEP_RATIO = 0.0035;
-const TREND_OVERLAP_MIN_STEP = 0.15;
 
 function splitIdentityRuleLine(line) {
   const source = String(line || '').trim();
@@ -491,68 +488,6 @@ function buildPercentTrendRows(
   });
 }
 
-function buildNonOverlappingTrendRows(rows, series, domain, enabled = false) {
-  if (!enabled || !Array.isArray(rows) || rows.length === 0) {
-    return Array.isArray(rows) ? rows : [];
-  }
-
-  const seriesKeys = Array.isArray(series) ? series.map((item) => item.key) : [];
-  if (seriesKeys.length <= 1) {
-    return rows;
-  }
-
-  const lowerBound = Number(Array.isArray(domain) ? domain[0] : 0);
-  const upperBound = Number(Array.isArray(domain) ? domain[1] : 100);
-  const range = Math.max(1, upperBound - lowerBound);
-  const offsetStep = Math.max(TREND_OVERLAP_MIN_STEP, range * TREND_OVERLAP_STEP_RATIO);
-
-  return rows.map((row) => {
-    const nextRow = { ...row };
-    const groups = new Map();
-
-    for (const key of seriesKeys) {
-      const rawValue = Number(row[key]) || 0;
-      nextRow[`${key}__raw`] = rawValue;
-      const bucket = rawValue.toFixed(TREND_OVERLAP_BUCKET_DIGITS);
-      if (!groups.has(bucket)) {
-        groups.set(bucket, []);
-      }
-      groups.get(bucket).push({ key, rawValue });
-    }
-
-    for (const entries of groups.values()) {
-      if (entries.length === 1) {
-        nextRow[entries[0].key] = entries[0].rawValue;
-        continue;
-      }
-
-      const baseValue = entries[0].rawValue;
-      const center = (entries.length - 1) / 2;
-      let offsets = entries.map((_, index) => (index - center) * offsetStep);
-
-      let minOffset = Math.min(...offsets);
-      let maxOffset = Math.max(...offsets);
-
-      if (baseValue + maxOffset > upperBound) {
-        const shiftDown = (baseValue + maxOffset) - upperBound;
-        offsets = offsets.map((offset) => offset - shiftDown);
-        minOffset -= shiftDown;
-      }
-
-      if (baseValue + minOffset < lowerBound) {
-        const shiftUp = lowerBound - (baseValue + minOffset);
-        offsets = offsets.map((offset) => offset + shiftUp);
-      }
-
-      entries.forEach((entry, index) => {
-        nextRow[entry.key] = entry.rawValue + offsets[index];
-      });
-    }
-
-    return nextRow;
-  });
-}
-
 function findNearestNodeIndex(nodes, targetY) {
   let nearestIndex = 0;
   let nearestDistance = Number.POSITIVE_INFINITY;
@@ -987,11 +922,6 @@ export default function App() {
     return [min, max];
   }, [showProjectPercent, trendScope, activeTrendRows, activeTrendSeries]);
 
-  const trendDisplayRows = useMemo(
-    () => buildNonOverlappingTrendRows(activeTrendRows, activeTrendSeries, trendDomain, showProjectPercent),
-    [activeTrendRows, activeTrendSeries, trendDomain, showProjectPercent]
-  );
-
   const selectedTrendPoint = useMemo(() => {
     if (activeTrendRows.length === 0) {
       return null;
@@ -1105,21 +1035,21 @@ export default function App() {
                   color="dark"
                   checked={showProjectPercent}
                   onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
-                  label="레포 내 비율(%)"
+                  label="레포 기여율(%)"
                 />
                 <Checkbox
                   size="sm"
                   color="dark"
                   checked={excludeTopLongCommits}
                   onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
-                  label="레포별 상위 10% 제외"
+                  label="긴 커밋 제외(상위 10%)"
                 />
                 <Checkbox
                   size="sm"
                   color="dark"
                   checked={subtractDeletions}
                   onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
-                  label={barChartMode === 'commits' ? '길이가 0인 commit 제외' : '삭제 제외(-)'}
+                  label={barChartMode === 'commits' ? '0줄 변경 커밋 제외' : '순변경으로 계산(+/-)'}
                 />
               </Group>
             </div>
@@ -1190,7 +1120,7 @@ export default function App() {
             </Group>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendDisplayRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis
                     dataKey="timestampMs"
@@ -1214,15 +1144,11 @@ export default function App() {
                   )}
                   <Tooltip
                     labelFormatter={(value) => formatKoreanDateTime(value)}
-                    formatter={(value, name, item) => {
-                      const rawKey = `${item?.dataKey}__raw`;
-                      const rawValue = item?.payload?.[rawKey];
-                      const displayValue = Number.isFinite(rawValue) ? rawValue : value;
-
+                    formatter={(value, name) => {
                       return [
                         showProjectPercent
-                          ? `${Math.max(0, Number(displayValue) || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-                          : formatNumber(displayValue),
+                          ? `${Math.max(0, Number(value) || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                          : formatNumber(value),
                         name,
                       ];
                     }}
