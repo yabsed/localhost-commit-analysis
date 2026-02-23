@@ -19,7 +19,8 @@ from pathlib import Path
 
 def parse_args() -> argparse.Namespace:
     root_dir = Path(__file__).resolve().parent
-    default_dir = root_dir / "commit_crawler"
+    crawler_dir = root_dir / "commit_crawler"
+    default_log_dir = crawler_dir / "repo"
 
     parser = argparse.ArgumentParser(
         description="Run full commit_crawler pipeline: input.txt to merged JSON."
@@ -27,19 +28,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         type=Path,
-        default=default_dir / "input.txt",
+        default=crawler_dir / "input.txt",
         help="Repository list input path (default: commit_crawler/input.txt)",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=default_dir,
-        help="Directory to write git-log text files (default: commit_crawler)",
+        default=default_log_dir,
+        help="Directory to write git-log text files (default: commit_crawler/repo)",
     )
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=default_dir / "merged_git_logs.json",
+        default=crawler_dir / "merged_git_logs.json",
         help="Merged JSON output path (default: commit_crawler/merged_git_logs.json)",
     )
     parser.add_argument(
@@ -57,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         "--encoding",
         default="utf-8",
         help="Encoding for merge stage (default: utf-8).",
+    )
+    parser.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Do not remove stale txt logs under output-dir.",
     )
     return parser.parse_args()
 
@@ -100,6 +106,8 @@ def main() -> None:
             crawl_cmd.extend(["--max-count", str(args.max_count)])
         if args.force:
             crawl_cmd.append("--force")
+        if args.no_prune:
+            crawl_cmd.append("--no-prune")
 
         run_step(crawl_cmd, "Crawl git logs")
 

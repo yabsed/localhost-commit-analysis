@@ -14,12 +14,14 @@ python3 commit_crawler.py
 
 This runs the full pipeline:
 
-- crawl: `input.txt -> commit_crawler/<owner>/<repo>.txt` (remote 기준)
-- crawl(local): `input.txt -> commit_crawler/_local/<repo>.txt`
+- crawl: `input.txt -> commit_crawler/repo/<owner>/<repo>.txt` (remote 기준)
+- crawl(local): `input.txt -> commit_crawler/repo/_local/<repo>.txt`
 - merge: `*.txt -> commit_crawler/merged_git_logs.json`
 
 If a target `.txt` already exists, crawler reuses it and skips clone/log fetch.
 Use `--force` to refresh.
+By default, crawler prunes stale `.txt` files in `commit_crawler/repo` that are
+not referenced by current `input.txt` to prevent unbounded file growth.
 
 ## Input formats
 
@@ -31,11 +33,12 @@ Use `--force` to refresh.
 ## Pipeline options
 
 - `--input <path>`: custom repo input path (default: `commit_crawler/input.txt`)
-- `--output-dir <path>`: log txt output directory (default: `commit_crawler`)
+- `--output-dir <path>`: log txt output directory (default: `commit_crawler/repo`)
 - `--output-json <path>`: merged JSON output path (default: `commit_crawler/merged_git_logs.json`)
 - `--max-count <n>`: limit commits per repository for test runs
 - `--encoding <name>`: merge encoding (default: `utf-8`)
 - `--force`: existing `.txt` 무시하고 다시 크롤링
+- `--no-prune`: stale `.txt` 자동 정리 비활성화
 
 ## Worker scripts
 

@@ -93,8 +93,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=script_dir,
-        help="Directory where output text files are written (default: commit_crawler).",
+        default=script_dir / "repo",
+        help="Directory where output text files are written (default: commit_crawler/repo).",
     )
     parser.add_argument(
         "--max-count",
@@ -112,6 +112,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Optional JSON path to write generated file list and failures.",
+    )
+    parser.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Do not remove stale *.txt files under output-dir after crawling.",
     )
     return parser.parse_args()
 
@@ -138,12 +143,16 @@ def write_manifest(
     input_path: Path,
     output_dir: Path,
     generated_files: list[Path],
+    planned_files: list[Path],
+    pruned_files: list[Path],
     failures: list[str],
 ) -> None:
     payload = {
         "input_file": str(input_path),
         "output_dir": str(output_dir),
         "generated_files": [str(path) for path in generated_files],
+        "planned_files": [str(path) for path in planned_files],
+        "pruned_files": [str(path) for path in pruned_files],
         "failures": failures,
     }
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -271,6 +280,32 @@ def should_reuse_output(path: Path, force: bool) -> bool:
     if force:
         return False
     return path.exists() and path.is_file() and path.stat().st_size > 0
+
+
+def prune_stale_txt_files(output_dir: Path, keep_paths: set[Path]) -> list[Path]:
+    removed: list[Path] = []
+    if not output_dir.exists() or not output_dir.is_dir():
+        return removed
+
+    for path in output_dir.rglob("*.txt"):
+        resolved = path.resolve()
+        if resolved in keep_paths:
+            continue
+        path.unlink()
+        removed.append(resolved)
+
+    dirs = sorted(
+        (path for path in output_dir.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in dirs:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+
+    return removed
 
 
 def count_commits(repo_path: Path) -> int | None:
@@ -469,6 +504,8 @@ def main() -> None:
 
     failures: list[str] = []
     generated_files: list[Path] = []
+    planned_output_paths: set[Path] = set()
+    pruned_files: list[Path] = []
     seen_output_paths: set[Path] = set()
     progress = ProgressReporter()
 
@@ -481,6 +518,7 @@ def main() -> None:
             remote_url = normalize_remote_spec(repo_spec)
             repo_label = remote_repo_name(repo_spec)
             output_path = build_remote_output_path(repo_spec, output_dir)
+            planned_output_paths.add(output_path.resolve())
 
             if should_reuse_output(output_path, args.force):
                 if output_path not in seen_output_paths:
@@ -535,6 +573,7 @@ def main() -> None:
 
         repo_label = repo_path.name or repo_spec
         output_path = build_local_output_path(repo_path, output_dir)
+        planned_output_paths.add(output_path.resolve())
 
         if should_reuse_output(output_path, args.force):
             if output_path not in seen_output_paths:
@@ -565,12 +604,19 @@ def main() -> None:
             seen_output_paths.add(output_path)
         print(f"[OK] {repo_spec} -> {output_path}")
 
+    if not args.no_prune:
+        pruned_files = prune_stale_txt_files(output_dir, planned_output_paths)
+        if pruned_files:
+            print(f"[PRUNE] removed {len(pruned_files)} stale log file(s)")
+
     if args.manifest is not None:
         write_manifest(
             args.manifest.resolve(),
             input_path,
             output_dir,
             generated_files,
+            sorted(planned_output_paths, key=lambda path: str(path)),
+            pruned_files,
             failures,
         )
 
