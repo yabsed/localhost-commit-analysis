@@ -39,7 +39,31 @@ import {
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
 const DEFAULT_IDENTITY_RULES_FILE = 'author_identity_rules.txt';
+const DATA_SOURCE_QUERY_KEY = 'source';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+
+function readDataSourceFromUrl() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const url = new URL(window.location.href);
+  const value = url.searchParams.get(DATA_SOURCE_QUERY_KEY);
+  return value ? String(value).trim() : null;
+}
+
+function replaceDataSourceInUrl(fileName) {
+  if (typeof window === 'undefined' || !fileName) {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set(DATA_SOURCE_QUERY_KEY, fileName);
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl === currentUrl) {
+    return;
+  }
+  window.history.replaceState({}, '', nextUrl);
+}
 
 function splitIdentityRuleLine(line) {
   const source = String(line || '').trim();
@@ -597,9 +621,13 @@ export default function App() {
         return;
       }
 
+      const requestedByUrl = readDataSourceFromUrl();
       setSelectedLogFile((current) => {
         if (preserveSelection && current && files.some((item) => item.name === current)) {
           return current;
+        }
+        if (requestedByUrl && files.some((item) => item.name === requestedByUrl)) {
+          return requestedByUrl;
         }
         return files[0].name;
       });
@@ -681,6 +709,13 @@ export default function App() {
   useEffect(() => {
     loadLogFiles();
   }, [loadLogFiles]);
+
+  useEffect(() => {
+    if (!selectedLogFile) {
+      return;
+    }
+    replaceDataSourceInUrl(selectedLogFile);
+  }, [selectedLogFile]);
 
   useEffect(() => {
     loadIdentityRuleFiles();
