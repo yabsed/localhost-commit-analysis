@@ -1672,7 +1672,7 @@ export default function App() {
         <Paper className="timeline-card" radius="xl" p="lg" withBorder>
           <div className="timeline-head">
             <div>
-              <Title order={2}>Commit History Timeline</Title>
+              <Title order={2}>Wackathon History Timeline</Title>
               <Text c="dimmed" size="sm">
                 프로젝트 라인 3개 위에 시간 순 커밋을 배치하고, 선후/작성자 전환 관계를 함께 표시합니다.
               </Text>

@@ -24,7 +24,7 @@
 
 ## 주요 기능
 
-- Commit History Timeline
+- Wackathon History Timeline
   - 프로젝트 라인(예: Mobile/PC/Server) 위에 커밋을 시간순으로 배치
   - 프로젝트 내부 연결, 프로젝트 간 선후 관계, 작성자 크로스 프로젝트 이동선을 함께 표시
   - 커밋 선택 시 해시/시간/라인 변경량/작성자 정보 확인
