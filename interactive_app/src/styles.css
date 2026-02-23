@@ -1,12 +1,12 @@
 :root {
-  --bg-top: #fdf6ec;
-  --bg-bottom: #f0f7f4;
-  --panel-glass: rgba(255, 255, 255, 0.78);
-  --panel-border: rgba(15, 89, 72, 0.18);
-  --shadow: 0 12px 30px rgba(27, 57, 49, 0.12);
-  --text-main: #123227;
-  --text-soft: #4d665e;
-  --lane: rgba(18, 50, 39, 0.17);
+  --bg-top: #f4f4f4;
+  --bg-bottom: #ececec;
+  --panel-glass: rgba(255, 255, 255, 0.96);
+  --panel-border: rgba(20, 20, 20, 0.16);
+  --shadow: 0 6px 14px rgba(0, 0, 0, 0.08);
+  --text-main: #111111;
+  --text-soft: #626262;
+  --lane: rgba(24, 24, 24, 0.24);
 }
 
 * {
@@ -23,11 +23,12 @@ body,
 }
 
 body {
+  font-family: Pretendard, 'Noto Sans KR', sans-serif;
   color: var(--text-main);
   background:
-    radial-gradient(circle at 8% 12%, rgba(238, 155, 0, 0.14), transparent 28%),
-    radial-gradient(circle at 88% 86%, rgba(10, 147, 150, 0.16), transparent 32%),
-    linear-gradient(140deg, var(--bg-top), var(--bg-bottom));
+    radial-gradient(circle at 12% 8%, rgba(0, 0, 0, 0.04), transparent 38%),
+    radial-gradient(circle at 84% 84%, rgba(0, 0, 0, 0.05), transparent 34%),
+    linear-gradient(160deg, var(--bg-top), var(--bg-bottom));
 }
 
 .app-shell {
@@ -57,7 +58,6 @@ body {
 .chart-card,
 .legend-card,
 .timeline-card {
-  backdrop-filter: blur(8px);
   background: var(--panel-glass);
   border: 1px solid var(--panel-border);
   box-shadow: var(--shadow);
@@ -70,7 +70,7 @@ body {
 }
 
 .metric-card {
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.64));
+  background: #ffffff;
 }
 
 .chart-wrap {
@@ -151,7 +151,7 @@ body {
 }
 
 .selected-commit-box {
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.9), rgba(238, 245, 242, 0.78));
+  background: #ffffff;
 }
 
 .timeline-scroll {
@@ -160,8 +160,7 @@ body {
   overflow: auto;
   border: 1px solid var(--panel-border);
   border-radius: 12px;
-  background:
-    linear-gradient(90deg, rgba(238, 244, 241, 0.9), rgba(253, 247, 238, 0.84));
+  background: #ffffff;
 }
 
 .timeline-canvas {
@@ -175,8 +174,8 @@ body {
 }
 
 .timeline-lane-pill {
-  fill: rgba(255, 255, 255, 0.84);
-  stroke: rgba(18, 50, 39, 0.2);
+  fill: rgba(248, 248, 248, 0.96);
+  stroke: rgba(18, 18, 18, 0.2);
 }
 
 .timeline-lane-label {
@@ -190,12 +189,12 @@ body {
 }
 
 .timeline-edge-project {
-  stroke: rgba(18, 50, 39, 0.34);
+  stroke: rgba(24, 24, 24, 0.35);
   stroke-width: 1.15;
 }
 
 .timeline-edge-precedence {
-  stroke: rgba(10, 147, 150, 0.42);
+  stroke: rgba(44, 44, 44, 0.36);
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
@@ -206,8 +205,8 @@ body {
 }
 
 .timeline-focus-line {
-  stroke: rgba(10, 147, 150, 0.92);
-  stroke-width: 2.1;
+  stroke: rgba(24, 24, 24, 0.82);
+  stroke-width: 1.7;
   stroke-dasharray: 8 6;
 }
 
@@ -226,11 +225,11 @@ body {
 }
 
 .timeline-node:hover .timeline-node-ring {
-  stroke: rgba(18, 50, 39, 0.35);
+  stroke: rgba(18, 18, 18, 0.36);
 }
 
 .timeline-node.is-selected .timeline-node-ring {
-  stroke: rgba(18, 50, 39, 0.85);
+  stroke: rgba(18, 18, 18, 0.84);
 }
 
 .center-screen {

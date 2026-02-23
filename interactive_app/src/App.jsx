@@ -320,7 +320,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="center-screen">
-        <Loader color="teal" size="lg" />
+        <Loader color="dark" size="lg" />
         <Text size="sm" c="dimmed">커밋 데이터를 불러오는 중...</Text>
       </div>
     );
@@ -331,7 +331,7 @@ export default function App() {
       <div className="center-screen">
         <Alert
           variant="light"
-          color="red"
+          color="gray"
           title="오류"
           icon={<IconAlertCircle size={16} />}
         >
@@ -359,7 +359,7 @@ export default function App() {
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={cumulativeRows.commitRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#d6e3dc" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis dataKey="projectLabel" />
                   <YAxis allowDecimals={false} domain={[0, commitAxisMax]} />
                   <Tooltip
@@ -396,6 +396,7 @@ export default function App() {
               </Stack>
               <Checkbox
                 size="sm"
+                color="dark"
                 checked={subtractDeletions}
                 onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
                 label="삭제(-)를 빼서 보기"
@@ -404,11 +405,11 @@ export default function App() {
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={cumulativeRows.lineRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#d6e3dc" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis dataKey="projectLabel" />
                   <YAxis allowDecimals={false} domain={lineAxisDomain} />
                   {subtractDeletions && (
-                    <ReferenceLine y={0} stroke="#6b7d78" strokeDasharray="4 4" />
+                    <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
                   )}
                   <Tooltip
                     content={
@@ -446,8 +447,8 @@ export default function App() {
             </div>
             <div className="edge-legend">
               <Badge variant="dot" color="gray">프로젝트 내부 흐름</Badge>
-              <Badge variant="dot" color="teal">프로젝트 간 선후</Badge>
-              <Badge variant="dot" color="orange">동일 작성자 전환</Badge>
+              <Badge variant="dot" color="gray">프로젝트 간 선후</Badge>
+              <Badge variant="dot" color="gray">동일 작성자 전환</Badge>
             </div>
           </div>
 
@@ -456,9 +457,20 @@ export default function App() {
             <Text fw={700}>{selectedCommitText(selectedNode)}</Text>
             {selectedNode && (
               <Group gap="xs" mt={6}>
-                <Badge color="teal" variant="light">+{formatNumber(selectedNode.additions)}</Badge>
-                <Badge color="red" variant="light">-{formatNumber(selectedNode.deletions)}</Badge>
-                <Badge color="gray" variant="light">{selectedNode.authorName}</Badge>
+                <Badge color="gray" variant="light">+{formatNumber(selectedNode.additions)}</Badge>
+                <Badge color="gray" variant="light">-{formatNumber(selectedNode.deletions)}</Badge>
+                <Badge
+                  variant="light"
+                  styles={{
+                    root: {
+                      backgroundColor: `${selectedNode.authorColor}26`,
+                      color: '#111111',
+                      borderColor: `${selectedNode.authorColor}66`,
+                    },
+                  }}
+                >
+                  {selectedNode.authorName}
+                </Badge>
               </Group>
             )}
           </Paper>
@@ -482,7 +494,7 @@ export default function App() {
                   markerHeight="5"
                   orient="auto"
                 >
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#0a9396" opacity="0.5" />
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b7b7b" opacity="0.6" />
                 </marker>
               </defs>
 

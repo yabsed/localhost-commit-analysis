@@ -1,17 +1,26 @@
 const AUTHOR_RE = /^(.*?)\s*<([^>]+)>$/;
 const PREFERRED_PROJECT_ORDER = ['mobile', 'pc', 'server'];
+const AUTHOR_EMAIL_ALIASES = {
+  '130139566+user983740@users.noreply.github.com': {
+    canonicalEmail: 'sms029317@gmail.com',
+    canonicalName: 'user983740',
+  },
+};
+const AUTHOR_NAME_ALIASES = {
+  'seo minseok': 'user983740',
+};
 
 const AUTHOR_COLORS = [
-  '#005f73',
-  '#0a9396',
-  '#94d2bd',
-  '#ee9b00',
-  '#ca6702',
-  '#bb3e03',
-  '#ae2012',
+  '#2563eb',
+  '#e11d48',
+  '#f59e0b',
+  '#10b981',
+  '#7c3aed',
+  '#06b6d4',
+  '#fb7185',
   '#3a86ff',
-  '#2a9d8f',
-  '#264653',
+  '#84cc16',
+  '#f97316',
 ];
 
 function basename(path = '') {
@@ -37,20 +46,24 @@ function parseAuthor(rawAuthor = '') {
   const source = String(rawAuthor || '').trim();
   const matched = AUTHOR_RE.exec(source);
   if (matched) {
-    const name = matched[1].trim() || matched[2].trim().split('@')[0];
+    const rawName = matched[1].trim() || matched[2].trim().split('@')[0];
     const email = matched[2].trim().toLowerCase();
+    const alias = AUTHOR_EMAIL_ALIASES[email];
+    const normalizedEmail = alias?.canonicalEmail ?? email;
+    const normalizedName = alias?.canonicalName ?? rawName;
     return {
-      id: email,
-      name,
-      email,
+      id: normalizedEmail,
+      name: normalizedName,
+      email: normalizedEmail,
       raw: source,
     };
   }
 
   const fallback = source || 'unknown';
+  const normalizedFallback = AUTHOR_NAME_ALIASES[fallback.toLowerCase()] ?? fallback;
   return {
-    id: fallback.toLowerCase(),
-    name: fallback,
+    id: normalizedFallback.toLowerCase(),
+    name: normalizedFallback,
     email: null,
     raw: source,
   };
