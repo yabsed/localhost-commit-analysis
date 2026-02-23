@@ -46,6 +46,7 @@ If omitted, default `source_name` is the repository name.
 - `--encoding <name>`: merge encoding (default: `utf-8`)
 - `--force`: existing `.txt` 무시하고 다시 크롤링
 - `--no-prune`: stale `.txt` 자동 정리 비활성화
+- `--disable-cutoff-filter`: merge 단계의 날짜 컷오프 필터 비활성화
 
 ## Worker scripts
 

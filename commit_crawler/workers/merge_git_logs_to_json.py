@@ -54,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional JSON map file: {\"/abs/path/to/log.txt\": \"source_name\"}.",
     )
+    parser.add_argument(
+        "--disable-cutoff-filter",
+        action="store_true",
+        help="Disable date cutoff filtering and keep all commits regardless of timestamp.",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +161,7 @@ def build_merged_json(
     paths: list[Path],
     encoding: str,
     source_name_map: dict[str, str],
+    apply_cutoff_filter: bool = True,
 ) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
@@ -182,7 +188,7 @@ def build_merged_json(
 
         for source_commit_index, raw_text in enumerate(blocks):
             parsed = extract_metadata_from_block(raw_text)
-            if is_after_cutoff(parsed["timestamp_unix"]):
+            if apply_cutoff_filter and is_after_cutoff(parsed["timestamp_unix"]):
                 dropped_after_cutoff += 1
                 continue
 
@@ -229,9 +235,14 @@ def build_merged_json(
         "sort_order": "timestamp_utc_ascending",
         "note": (
             "Each entry keeps the full commit block in raw_text. "
-            "Commit blocks after 2026-02-22T09:00:00+09:00 are discarded."
+            + (
+                "Commit blocks after 2026-02-22T09:00:00+09:00 are discarded."
+                if apply_cutoff_filter
+                else "Date cutoff filter is disabled."
+            )
         ),
         "filters": {
+            "cutoff_filter_enabled": apply_cutoff_filter,
             "drop_after_local": CUTOFF_DATETIME_LOCAL.isoformat(),
             "drop_after_utc": CUTOFF_DATETIME_UTC.isoformat().replace("+00:00", "Z"),
             "dropped_entry_count": dropped_after_cutoff_total,
@@ -250,7 +261,12 @@ def main() -> None:
         raise SystemExit(f"Input file not found: {', '.join(missing)}")
 
     source_name_map = load_source_name_map(args.source_name_map)
-    merged = build_merged_json(paths, args.encoding, source_name_map)
+    merged = build_merged_json(
+        paths,
+        args.encoding,
+        source_name_map,
+        apply_cutoff_filter=not args.disable_cutoff_filter,
+    )
     output_path = args.output.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -265,12 +281,15 @@ def main() -> None:
             f"filtered_after_cutoff={source['filtered_out_after_cutoff_count']}, "
             f"lossless_check={status}"
         )
-    print(
-        "Cutoff filter: "
-        f"drop commits after {merged['filters']['drop_after_local']} "
-        f"({merged['filters']['drop_after_utc']}), "
-        f"dropped={merged['filters']['dropped_entry_count']}"
-    )
+    if merged["filters"]["cutoff_filter_enabled"]:
+        print(
+            "Cutoff filter: "
+            f"drop commits after {merged['filters']['drop_after_local']} "
+            f"({merged['filters']['drop_after_utc']}), "
+            f"dropped={merged['filters']['dropped_entry_count']}"
+        )
+    else:
+        print("Cutoff filter disabled: no commits were dropped by timestamp")
 
 
 if __name__ == "__main__":

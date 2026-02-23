@@ -71,6 +71,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not remove stale txt logs under output-dir.",
     )
+    parser.add_argument(
+        "--disable-cutoff-filter",
+        action="store_true",
+        help="Disable date cutoff filtering when merging logs into JSON.",
+    )
     return parser.parse_args()
 
 
@@ -156,6 +161,8 @@ def main() -> None:
         ]
         if source_name_map_path is not None:
             merge_cmd.extend(["--source-name-map", str(source_name_map_path)])
+        if args.disable_cutoff_filter:
+            merge_cmd.append("--disable-cutoff-filter")
         run_step(merge_cmd, "Merge logs to JSON")
 
     print("\nPipeline completed.")

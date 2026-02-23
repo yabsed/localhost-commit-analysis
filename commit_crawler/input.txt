@@ -15,5 +15,4 @@
 # jangjinuite/aicupid-backend -> backend
 
 
-https://github.com/h-seo-n/wackathon-front
-https://github.com/mjy926/wackathon-server
+https://github.com/yabsed/localhost-commit-analysis
