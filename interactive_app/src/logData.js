@@ -1,14 +1,5 @@
 const AUTHOR_RE = /^(.*?)\s*<([^>]+)>$/;
 const PREFERRED_PROJECT_ORDER = ['mobile', 'pc', 'server'];
-const AUTHOR_EMAIL_ALIASES = {
-  '130139566+user983740@users.noreply.github.com': {
-    canonicalEmail: 'sms029317@gmail.com',
-    canonicalName: 'user983740',
-  },
-};
-const AUTHOR_NAME_ALIASES = {
-  'seo minseok': 'user983740',
-};
 
 const AUTHOR_COLORS = [
   '#2563eb',
@@ -42,28 +33,103 @@ function projectLabel(projectId) {
   return map[projectId] ?? projectId;
 }
 
+function normalizeIdentityToken(value = '') {
+  return String(value || '').trim().toLowerCase();
+}
+
+function createIdentityResolver(identityPairs = []) {
+  const parent = new Map();
+
+  function ensure(token) {
+    if (!parent.has(token)) {
+      parent.set(token, token);
+    }
+  }
+
+  function find(token) {
+    const current = parent.get(token);
+    if (!current) {
+      return token;
+    }
+    if (current === token) {
+      return token;
+    }
+    const root = find(current);
+    parent.set(token, root);
+    return root;
+  }
+
+  function union(leftToken, rightToken) {
+    ensure(leftToken);
+    ensure(rightToken);
+    const leftRoot = find(leftToken);
+    const rightRoot = find(rightToken);
+    if (leftRoot !== rightRoot) {
+      parent.set(rightRoot, leftRoot);
+    }
+  }
+
+  for (const pair of identityPairs) {
+    const leftValue = Array.isArray(pair) ? pair[0] : pair?.left;
+    const rightValue = Array.isArray(pair) ? pair[1] : pair?.right;
+    const leftToken = normalizeIdentityToken(leftValue);
+    const rightToken = normalizeIdentityToken(rightValue);
+    if (!leftToken || !rightToken) {
+      continue;
+    }
+    union(leftToken, rightToken);
+  }
+
+  return function resolveAuthorIdentity(author) {
+    const candidates = [author.name, author.email, author.id]
+      .map((token) => normalizeIdentityToken(token))
+      .filter(Boolean);
+
+    const matchedRoots = [];
+    for (const token of candidates) {
+      if (!parent.has(token)) {
+        continue;
+      }
+      matchedRoots.push(find(token));
+    }
+
+    if (matchedRoots.length === 0) {
+      return author;
+    }
+
+    const canonicalRoot = matchedRoots[0];
+    for (let index = 1; index < matchedRoots.length; index += 1) {
+      union(canonicalRoot, matchedRoots[index]);
+    }
+    for (const token of candidates) {
+      union(canonicalRoot, token);
+    }
+
+    return {
+      ...author,
+      id: `alias:${find(canonicalRoot)}`,
+    };
+  };
+}
+
 function parseAuthor(rawAuthor = '') {
   const source = String(rawAuthor || '').trim();
   const matched = AUTHOR_RE.exec(source);
   if (matched) {
-    const rawName = matched[1].trim() || matched[2].trim().split('@')[0];
+    const name = matched[1].trim() || matched[2].trim().split('@')[0];
     const email = matched[2].trim().toLowerCase();
-    const alias = AUTHOR_EMAIL_ALIASES[email];
-    const normalizedEmail = alias?.canonicalEmail ?? email;
-    const normalizedName = alias?.canonicalName ?? rawName;
     return {
-      id: normalizedEmail,
-      name: normalizedName,
-      email: normalizedEmail,
+      id: email,
+      name,
+      email,
       raw: source,
     };
   }
 
   const fallback = source || 'unknown';
-  const normalizedFallback = AUTHOR_NAME_ALIASES[fallback.toLowerCase()] ?? fallback;
   return {
-    id: normalizedFallback.toLowerCase(),
-    name: normalizedFallback,
+    id: fallback.toLowerCase(),
+    name: fallback,
     email: null,
     raw: source,
   };
@@ -173,17 +239,42 @@ export function formatNumber(value) {
   return Number(value || 0).toLocaleString('ko-KR');
 }
 
-export function processLogData(payload) {
+export function processLogData(payload, options = {}) {
   const rawEntries = Array.isArray(payload?.entries) ? payload.entries : [];
+  const identityPairs = Array.isArray(options?.identityPairs) ? options.identityPairs : [];
+  const resolveAuthorIdentity = createIdentityResolver(identityPairs);
   const projectStatsMap = new Map();
   const authorNameCounts = new Map();
   const authorStatsMap = new Map();
+  const preprocessedEntries = rawEntries.map((entry, index) => ({
+    entry,
+    index,
+    projectId: stripExt(basename(entry.source_file)),
+    parsedAuthor: parseAuthor(entry.author),
+    lineStats: computeLineStats(entry.raw_text),
+    timestampMs: parseTimestampMs(entry),
+    title: extractCommitTitle(entry.raw_text),
+  }));
 
-  const normalizedNodes = rawEntries.map((entry, index) => {
-    const projectId = stripExt(basename(entry.source_file));
-    const author = parseAuthor(entry.author);
-    const lineStats = computeLineStats(entry.raw_text);
-    const timestampMs = parseTimestampMs(entry);
+  // Warm-up pass: apply alias graph to every observed author first.
+  for (const item of preprocessedEntries) {
+    resolveAuthorIdentity(item.parsedAuthor);
+  }
+  for (const item of preprocessedEntries) {
+    resolveAuthorIdentity(item.parsedAuthor);
+  }
+
+  const normalizedNodes = preprocessedEntries.map((item) => {
+    const {
+      entry,
+      index,
+      projectId,
+      parsedAuthor,
+      lineStats,
+      timestampMs,
+      title,
+    } = item;
+    const author = resolveAuthorIdentity(parsedAuthor);
 
     if (!projectStatsMap.has(projectId)) {
       projectStatsMap.set(projectId, {
@@ -205,6 +296,10 @@ export function processLogData(payload) {
         lines: 0,
       });
     }
+    const authorStats = authorStatsMap.get(author.id);
+    if (!authorStats.email && author.email) {
+      authorStats.email = author.email;
+    }
 
     const nameCounter = authorNameCounts.get(author.id);
     nameCounter.set(author.name, (nameCounter.get(author.name) ?? 0) + 1);
@@ -213,7 +308,6 @@ export function processLogData(payload) {
     projectStats.commits += 1;
     projectStats.lines += lineStats.touched;
 
-    const authorStats = authorStatsMap.get(author.id);
     authorStats.commits += 1;
     authorStats.lines += lineStats.touched;
 
@@ -228,7 +322,7 @@ export function processLogData(payload) {
       authorId: author.id,
       authorRaw: author.raw,
       authorFallbackName: author.name,
-      title: extractCommitTitle(entry.raw_text),
+      title,
       timestampMs,
       timestampUtc: entry.timestamp_utc,
       dateOriginal: entry.date_original,

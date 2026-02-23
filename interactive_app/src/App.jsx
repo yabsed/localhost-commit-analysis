@@ -2,13 +2,16 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
+  Button,
   Card,
   Checkbox,
   Group,
   Loader,
+  Modal,
   Paper,
   Stack,
   Text,
+  Textarea,
   Title,
 } from '@mantine/core';
 import {
@@ -29,6 +32,73 @@ import {
   formatNumber,
   processLogData,
 } from './logData';
+
+const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
+
+function splitIdentityRuleLine(line) {
+  const source = String(line || '').trim();
+  if (!source || source.startsWith('#')) {
+    return null;
+  }
+
+  const splitBy = (delimiter) => {
+    const index = source.indexOf(delimiter);
+    if (index < 0) {
+      return null;
+    }
+    const left = source.slice(0, index).trim();
+    const right = source.slice(index + delimiter.length).trim();
+    if (!left || !right) {
+      return null;
+    }
+    return [left, right];
+  };
+
+  return (
+    splitBy('->') ??
+    splitBy(' - ') ??
+    splitBy(',') ??
+    splitBy('\t') ??
+    (() => {
+      const firstDash = source.indexOf('-');
+      const lastDash = source.lastIndexOf('-');
+      if (firstDash <= 1 || firstDash !== lastDash || firstDash >= source.length - 2) {
+        return null;
+      }
+      const left = source.slice(0, firstDash).trim();
+      const right = source.slice(firstDash + 1).trim();
+      if (left.length < 2 || right.length < 2) {
+        return null;
+      }
+      return [left, right];
+    })()
+  );
+}
+
+function parseIdentityRules(rawText = '') {
+  const lines = String(rawText || '').split('\n');
+  const pairs = [];
+  const invalidLines = [];
+
+  lines.forEach((line, index) => {
+    const source = String(line || '').trim();
+    if (!source || source.startsWith('#')) {
+      return;
+    }
+
+    const pair = splitIdentityRuleLine(source);
+    if (!pair) {
+      invalidLines.push({ lineNumber: index + 1, value: source });
+      return;
+    }
+    pairs.push(pair);
+  });
+
+  return {
+    pairs,
+    invalidLines,
+  };
+}
 
 function StackedTooltip({ active, payload, label, authorByKey, unitLabel }) {
   if (!active || !payload || payload.length === 0) {
@@ -158,7 +228,20 @@ export default function App() {
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
   const [focusLineY, setFocusLineY] = useState(0);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
+  const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
   const timelineScrollRef = useRef(null);
+
+  const identityRules = useMemo(
+    () => parseIdentityRules(identityRulesText),
+    [identityRulesText]
+  );
+
+  const draftIdentityRules = useMemo(
+    () => parseIdentityRules(draftIdentityRulesText),
+    [draftIdentityRulesText]
+  );
 
   useEffect(() => {
     let mounted = true;
@@ -196,8 +279,8 @@ export default function App() {
     if (!payload) {
       return null;
     }
-    return processLogData(payload);
-  }, [payload]);
+    return processLogData(payload, { identityPairs: identityRules.pairs });
+  }, [payload, identityRules]);
 
   const selectedNode = useMemo(() => {
     if (!prepared?.timeline?.nodes?.length) {
@@ -316,6 +399,9 @@ export default function App() {
 
     return [min, max];
   }, [lineRows, netLineRows, subtractDeletions]);
+
+  const ignoredRuleCount = identityRules.invalidLines.length;
+  const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
 
   if (loading) {
     return (
@@ -445,11 +531,22 @@ export default function App() {
                 프로젝트 라인 3개 위에 시간 순 커밋을 배치하고, 선후/작성자 전환 관계를 함께 표시합니다.
               </Text>
             </div>
-            <div className="edge-legend">
-              <Badge variant="dot" color="gray">프로젝트 내부 흐름</Badge>
-              <Badge variant="dot" color="gray">프로젝트 간 선후</Badge>
-              <Badge variant="dot" color="gray">동일 작성자 전환</Badge>
-            </div>
+            <Group gap="xs" align="center">
+              {ignoredRuleCount > 0 && (
+                <Badge color="gray" variant="light">무시된 규칙 {ignoredRuleCount}개</Badge>
+              )}
+              <Button
+                size="xs"
+                color="dark"
+                variant="default"
+                onClick={() => {
+                  setDraftIdentityRulesText(identityRulesText);
+                  setIsIdentityModalOpen(true);
+                }}
+              >
+                작성자 병합 규칙
+              </Button>
+            </Group>
           </div>
 
           <Paper withBorder radius="md" p="sm" mb="sm" className="selected-commit-box">
@@ -595,6 +692,55 @@ export default function App() {
           </div>
         </Paper>
       </section>
+
+      <Modal
+        opened={isIdentityModalOpen}
+        onClose={() => setIsIdentityModalOpen(false)}
+        title="작성자 병합 규칙 (1:1)"
+        centered
+        size="lg"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            한 줄에 한 쌍씩 입력하세요. 형식: 사용자A - 사용자B 또는 사용자A → 사용자B
+          </Text>
+          <Textarea
+            minRows={7}
+            autosize
+            value={draftIdentityRulesText}
+            onChange={(event) => setDraftIdentityRulesText(event.currentTarget.value)}
+            placeholder={'Seo Minseok - user983740\n사용자1 - 나도사용자1\n나도사용자1 - 나역시사용자1'}
+          />
+          {ignoredDraftRuleCount > 0 && (
+            <Text size="xs" c="dimmed">
+              형식이 맞지 않은 줄 {ignoredDraftRuleCount}개는 적용 시 무시됩니다.
+            </Text>
+          )}
+          <Group justify="space-between">
+            <Button
+              variant="subtle"
+              color="gray"
+              onClick={() => setDraftIdentityRulesText(DEFAULT_IDENTITY_RULES_TEXT)}
+            >
+              기본값 복원
+            </Button>
+            <Group gap="xs">
+              <Button variant="default" onClick={() => setIsIdentityModalOpen(false)}>
+                취소
+              </Button>
+              <Button
+                color="dark"
+                onClick={() => {
+                  setIdentityRulesText(draftIdentityRulesText);
+                  setIsIdentityModalOpen(false);
+                }}
+              >
+                적용
+              </Button>
+            </Group>
+          </Group>
+        </Stack>
+      </Modal>
     </main>
   );
 }
