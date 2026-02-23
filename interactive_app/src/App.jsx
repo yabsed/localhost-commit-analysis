@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -84,11 +84,60 @@ function selectedCommitText(node) {
   ].join(' ');
 }
 
+function buildCumulativeRows(projects, authors, nodes) {
+  const commitRowsByProject = new Map();
+  const lineRowsByProject = new Map();
+
+  for (const project of projects) {
+    const commitRow = {
+      projectId: project.id,
+      projectLabel: project.label,
+      total: 0,
+    };
+    const lineRow = {
+      projectId: project.id,
+      projectLabel: project.label,
+      total: 0,
+    };
+
+    for (const author of authors) {
+      commitRow[author.key] = 0;
+      lineRow[author.key] = 0;
+    }
+
+    commitRowsByProject.set(project.id, commitRow);
+    lineRowsByProject.set(project.id, lineRow);
+  }
+
+  for (const node of nodes) {
+    const commitRow = commitRowsByProject.get(node.projectId);
+    const lineRow = lineRowsByProject.get(node.projectId);
+
+    if (!commitRow || !lineRow || !node.authorKey) {
+      continue;
+    }
+
+    commitRow[node.authorKey] += 1;
+    commitRow.total += 1;
+
+    const touchedLines = Number(node.touchedLines) || 0;
+    lineRow[node.authorKey] += touchedLines;
+    lineRow.total += touchedLines;
+  }
+
+  return {
+    commitRows: projects.map((project) => commitRowsByProject.get(project.id)),
+    lineRows: projects.map((project) => lineRowsByProject.get(project.id)),
+  };
+}
+
 export default function App() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState(null);
+  const [visibleNodeCount, setVisibleNodeCount] = useState(0);
+  const timelineScrollRef = useRef(null);
 
   useEffect(() => {
     let mounted = true;
@@ -149,6 +198,83 @@ export default function App() {
       prepared.timeline.nodes[prepared.timeline.nodes.length - 1]
     );
   }, [prepared, selectedId]);
+  const commitRows = prepared?.commitRows ?? [];
+  const lineRows = prepared?.lineRows ?? [];
+  const projects = prepared?.projects ?? [];
+  const authors = prepared?.authors ?? [];
+  const authorByKey = prepared?.authorByKey ?? {};
+  const timeline = prepared?.timeline;
+
+  useEffect(() => {
+    if (!timeline?.nodes?.length) {
+      setVisibleNodeCount(0);
+      return;
+    }
+
+    const scrollElement = timelineScrollRef.current;
+    if (!scrollElement) {
+      setVisibleNodeCount(timeline.nodes.length);
+      return;
+    }
+
+    let frameId = 0;
+    let ticking = false;
+
+    const updateVisibleCount = () => {
+      const viewportBottom = scrollElement.scrollTop + scrollElement.clientHeight;
+      let nextCount = timeline.nodes.length;
+
+      for (let index = 0; index < timeline.nodes.length; index += 1) {
+        if (timeline.nodes[index].y > viewportBottom) {
+          nextCount = index;
+          break;
+        }
+      }
+
+      setVisibleNodeCount((prev) => (prev === nextCount ? prev : nextCount));
+    };
+
+    const scheduleUpdate = () => {
+      if (ticking) {
+        return;
+      }
+      ticking = true;
+      frameId = window.requestAnimationFrame(() => {
+        ticking = false;
+        updateVisibleCount();
+      });
+    };
+
+    updateVisibleCount();
+    scrollElement.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      scrollElement.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+    };
+  }, [timeline]);
+
+  const cumulativeRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return buildCumulativeRows(projects, authors, []);
+    }
+    const clampedCount = Math.max(0, Math.min(visibleNodeCount, timeline.nodes.length));
+    return buildCumulativeRows(projects, authors, timeline.nodes.slice(0, clampedCount));
+  }, [authors, projects, timeline, visibleNodeCount]);
+
+  const commitAxisMax = useMemo(
+    () => Math.max(1, ...commitRows.map((row) => Number(row.total) || 0)),
+    [commitRows]
+  );
+
+  const lineAxisMax = useMemo(
+    () => Math.max(1, ...lineRows.map((row) => Number(row.total) || 0)),
+    [lineRows]
+  );
 
   if (loading) {
     return (
@@ -174,18 +300,9 @@ export default function App() {
     );
   }
 
-  if (!prepared) {
+  if (!prepared || !timeline) {
     return null;
   }
-
-  const {
-    commitRows,
-    lineRows,
-    projects,
-    authors,
-    authorByKey,
-    timeline,
-  } = prepared;
 
   return (
     <main className="app-shell">
@@ -195,15 +312,15 @@ export default function App() {
             <Stack gap="xs">
               <Title order={4}>커밋 수 (프로젝트 x 작성자)</Title>
               <Text size="sm" c="dimmed">
-                각 막대는 프로젝트, 색상 조각은 작성자입니다.
+                타임라인 스크롤 위치까지의 누적 커밋 수입니다.
               </Text>
             </Stack>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={commitRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <BarChart data={cumulativeRows.commitRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d6e3dc" />
                   <XAxis dataKey="projectLabel" />
-                  <YAxis allowDecimals={false} />
+                  <YAxis allowDecimals={false} domain={[0, commitAxisMax]} />
                   <Tooltip
                     content={
                       <StackedTooltip
@@ -230,15 +347,15 @@ export default function App() {
             <Stack gap="xs">
               <Title order={4}>라인 수 (프로젝트 x 작성자)</Title>
               <Text size="sm" c="dimmed">
-                `+`/`-` diff 라인을 합산해 작성자별 변화량을 표시합니다.
+                타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.
               </Text>
             </Stack>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={lineRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <BarChart data={cumulativeRows.lineRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d6e3dc" />
                   <XAxis dataKey="projectLabel" />
-                  <YAxis allowDecimals={false} />
+                  <YAxis allowDecimals={false} domain={[0, lineAxisMax]} />
                   <Tooltip
                     content={
                       <StackedTooltip
@@ -292,7 +409,7 @@ export default function App() {
             )}
           </Paper>
 
-          <div className="timeline-scroll">
+          <div className="timeline-scroll" ref={timelineScrollRef}>
             <svg
               width={timeline.width}
               height={timeline.height}
