@@ -1,0 +1,7 @@
+# Author merge rules (one pair per line)
+# Format examples:
+# Source User - Canonical User
+# Source User -> Canonical User
+
+Seo Minseok - user983740
+Jisu Hong -> 홍지수 Jisu Hong

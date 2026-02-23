@@ -38,6 +38,7 @@ import {
 } from './logData';
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
+const DEFAULT_IDENTITY_RULES_FILE = 'author_identity_rules.txt';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
 
 function splitIdentityRuleLine(line) {
@@ -551,6 +552,12 @@ export default function App() {
   const [trendScope, setTrendScope] = useState('byProject');
   const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [identityRuleFiles, setIdentityRuleFiles] = useState([]);
+  const [identityRuleFilesLoading, setIdentityRuleFilesLoading] = useState(true);
+  const [refreshingIdentityRuleFiles, setRefreshingIdentityRuleFiles] = useState(false);
+  const [selectedIdentityRuleFile, setSelectedIdentityRuleFile] = useState(null);
+  const [identityRuleFileLoading, setIdentityRuleFileLoading] = useState(false);
+  const [identityRuleFileError, setIdentityRuleFileError] = useState('');
   const [isDataSourceModalOpen, setIsDataSourceModalOpen] = useState(false);
   const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
   const timelineScrollRef = useRef(null);
@@ -608,9 +615,83 @@ export default function App() {
     }
   }, []);
 
+  const loadIdentityRuleFiles = useCallback(async ({ preserveSelection = true, manual = false } = {}) => {
+    if (manual) {
+      setRefreshingIdentityRuleFiles(true);
+    } else {
+      setIdentityRuleFilesLoading(true);
+    }
+
+    try {
+      const res = await fetch('/api/identity-rule-files');
+      if (!res.ok) {
+        throw new Error(`규칙 파일 목록 로드 실패: ${res.status}`);
+      }
+      const data = await res.json();
+      const files = Array.isArray(data?.files) ? data.files : [];
+      setIdentityRuleFiles(files);
+      setSelectedIdentityRuleFile((current) => {
+        if (preserveSelection && current && files.some((item) => item.name === current)) {
+          return current;
+        }
+        const defaultFile = files.find((item) => item.name === DEFAULT_IDENTITY_RULES_FILE);
+        if (defaultFile) {
+          return defaultFile.name;
+        }
+        return files[0]?.name ?? null;
+      });
+      if (files.length === 0) {
+        setIdentityRuleFileError('interactive_app 디렉토리에 .txt 규칙 파일이 없습니다.');
+      } else {
+        setIdentityRuleFileError('');
+      }
+    } catch (err) {
+      setIdentityRuleFileError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (manual) {
+        setRefreshingIdentityRuleFiles(false);
+      } else {
+        setIdentityRuleFilesLoading(false);
+      }
+    }
+  }, []);
+
+  const loadIdentityRulesFromFile = useCallback(async (fileName) => {
+    if (!fileName) {
+      return;
+    }
+
+    try {
+      setIdentityRuleFileLoading(true);
+      const res = await fetch(`/api/identity-rule-file?file=${encodeURIComponent(fileName)}`);
+      if (!res.ok) {
+        throw new Error(`규칙 파일 로드 실패: ${res.status}`);
+      }
+      const text = await res.text();
+      setIdentityRulesText(text);
+      setDraftIdentityRulesText(text);
+      setIdentityRuleFileError('');
+    } catch (err) {
+      setIdentityRuleFileError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIdentityRuleFileLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadLogFiles();
   }, [loadLogFiles]);
+
+  useEffect(() => {
+    loadIdentityRuleFiles();
+  }, [loadIdentityRuleFiles]);
+
+  useEffect(() => {
+    if (!selectedIdentityRuleFile) {
+      return;
+    }
+    loadIdentityRulesFromFile(selectedIdentityRuleFile);
+  }, [selectedIdentityRuleFile, loadIdentityRulesFromFile]);
 
   useEffect(() => {
     if (!selectedLogFile) {
@@ -659,6 +740,19 @@ export default function App() {
       label: item.name,
     })),
     [logFiles]
+  );
+
+  const selectedIdentityRuleFileMeta = useMemo(
+    () => identityRuleFiles.find((item) => item.name === selectedIdentityRuleFile) ?? null,
+    [identityRuleFiles, selectedIdentityRuleFile]
+  );
+
+  const identityRuleFileOptions = useMemo(
+    () => identityRuleFiles.map((item) => ({
+      value: item.name,
+      label: item.name,
+    })),
+    [identityRuleFiles]
   );
 
   const prepared = useMemo(() => {
@@ -1543,9 +1637,55 @@ export default function App() {
       >
         <Stack gap="sm">
           <Text size="sm" c="dimmed">
-            한 줄에 한 쌍씩 입력하세요. 형식: 사용자A - 사용자B 또는 사용자A → 사용자B
+            `interactive_app` 디렉토리의 `.txt` 파일을 선택하면 규칙을 불러옵니다.
+            파일을 수정한 뒤 "파일 다시읽기"를 누르면 코드 수정 없이 반영됩니다.
+          </Text>
+          <Select
+            label="규칙 파일 (.txt)"
+            data={identityRuleFileOptions}
+            value={selectedIdentityRuleFile}
+            onChange={(value) => setSelectedIdentityRuleFile(value)}
+            searchable={false}
+            allowDeselect={false}
+            disabled={identityRuleFilesLoading}
+            nothingFoundMessage="선택 가능한 .txt 파일이 없습니다."
+          />
+          {selectedIdentityRuleFileMeta && (
+            <Text size="xs" c="dimmed">
+              수정 시각: {formatKoreanDateTime(selectedIdentityRuleFileMeta.modifiedAtMs)}
+            </Text>
+          )}
+          {identityRuleFileError && (
+            <Alert variant="light" color="gray" icon={<IconAlertCircle size={14} />}>
+              {identityRuleFileError}
+            </Alert>
+          )}
+          <Group gap="xs">
+            <Button
+              size="xs"
+              variant="default"
+              color="gray"
+              onClick={() => loadIdentityRuleFiles({ preserveSelection: true, manual: true })}
+              loading={refreshingIdentityRuleFiles}
+            >
+              파일 목록 새로고침
+            </Button>
+            <Button
+              size="xs"
+              variant="default"
+              color="gray"
+              onClick={() => loadIdentityRulesFromFile(selectedIdentityRuleFile)}
+              loading={identityRuleFileLoading}
+              disabled={!selectedIdentityRuleFile}
+            >
+              파일 다시읽기
+            </Button>
+          </Group>
+          <Text size="sm" c="dimmed">
+            한 줄에 한 쌍씩 사용하세요. 형식: 사용자A - 사용자B 또는 사용자A → 사용자B
           </Text>
           <Textarea
+            label="현재 적용 규칙 내용"
             minRows={7}
             autosize
             value={draftIdentityRulesText}
@@ -1561,9 +1701,10 @@ export default function App() {
             <Button
               variant="subtle"
               color="gray"
-              onClick={() => setDraftIdentityRulesText(DEFAULT_IDENTITY_RULES_TEXT)}
+              onClick={() => loadIdentityRulesFromFile(selectedIdentityRuleFile)}
+              disabled={!selectedIdentityRuleFile}
             >
-              기본값 복원
+              파일 내용으로 되돌리기
             </Button>
             <Group gap="xs">
               <Button variant="default" onClick={() => setIsIdentityModalOpen(false)}>

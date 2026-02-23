@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COMMIT_JSON_DIR = path.resolve(__dirname, '../commit_crawler/json');
+const IDENTITY_RULES_DIR = __dirname;
 
 function jsonResponse(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -13,7 +14,7 @@ function jsonResponse(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
-function parseRequestedFile(urlValue) {
+function parseRequestedFile(urlValue, extension) {
   const url = new URL(urlValue, 'http://localhost');
   const value = url.searchParams.get('file');
   if (!value) {
@@ -22,7 +23,7 @@ function parseRequestedFile(urlValue) {
   if (path.basename(value) !== value) {
     return null;
   }
-  if (!value.endsWith('.json')) {
+  if (!value.endsWith(extension)) {
     return null;
   }
   return value;
@@ -62,6 +63,40 @@ async function readCommitJsonFile(fileName) {
   return readFile(fullPath, 'utf-8');
 }
 
+async function listIdentityRuleTextFiles() {
+  let directoryEntries = [];
+  try {
+    directoryEntries = await readdir(IDENTITY_RULES_DIR, { withFileTypes: true });
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+
+  const files = [];
+  for (const entry of directoryEntries) {
+    if (!entry.isFile() || !entry.name.endsWith('.txt')) {
+      continue;
+    }
+    const fullPath = path.join(IDENTITY_RULES_DIR, entry.name);
+    const fileStat = await stat(fullPath);
+    files.push({
+      name: entry.name,
+      sizeBytes: fileStat.size,
+      modifiedAtMs: fileStat.mtimeMs,
+    });
+  }
+
+  files.sort((a, b) => b.modifiedAtMs - a.modifiedAtMs || a.name.localeCompare(b.name));
+  return files;
+}
+
+async function readIdentityRuleTextFile(fileName) {
+  const fullPath = path.join(IDENTITY_RULES_DIR, fileName);
+  return readFile(fullPath, 'utf-8');
+}
+
 function attachCommitJsonApi(server) {
   server.middlewares.use(async (req, res, next) => {
     if (!req.url || req.method !== 'GET') {
@@ -79,7 +114,7 @@ function attachCommitJsonApi(server) {
       }
 
       if (parsed.pathname === '/api/commit-log') {
-        const fileName = parseRequestedFile(req.url);
+        const fileName = parseRequestedFile(req.url, '.json');
         if (!fileName) {
           jsonResponse(res, 400, { error: 'invalid file parameter' });
           return;
@@ -87,6 +122,25 @@ function attachCommitJsonApi(server) {
         const text = await readCommitJsonFile(fileName);
         res.statusCode = 200;
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end(text);
+        return;
+      }
+
+      if (parsed.pathname === '/api/identity-rule-files') {
+        const files = await listIdentityRuleTextFiles();
+        jsonResponse(res, 200, { files });
+        return;
+      }
+
+      if (parsed.pathname === '/api/identity-rule-file') {
+        const fileName = parseRequestedFile(req.url, '.txt');
+        if (!fileName) {
+          jsonResponse(res, 400, { error: 'invalid file parameter' });
+          return;
+        }
+        const text = await readIdentityRuleTextFile(fileName);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.end(text);
         return;
       }
