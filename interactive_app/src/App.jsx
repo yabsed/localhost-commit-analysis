@@ -518,42 +518,6 @@ function buildStackValueBounds(rows, authors) {
   return { min, max };
 }
 
-function buildStackEdgeByRow(rows, authors) {
-  return rows.map((row) => {
-    let positiveEndKey = null;
-    let negativeEndKey = null;
-
-    for (const author of authors) {
-      const value = Number(row?.[author.key]) || 0;
-      if (value > 0) {
-        positiveEndKey = author.key;
-      }
-      if (value < 0) {
-        negativeEndKey = author.key;
-      }
-    }
-
-    return {
-      positiveEndKey,
-      negativeEndKey,
-    };
-  });
-}
-
-function getStackBarCellRadius(value, edgeByRow, authorKey) {
-  if (!edgeByRow || !authorKey || !Number.isFinite(value) || value === 0) {
-    return [0, 0, 0, 0];
-  }
-
-  if (value > 0 && edgeByRow.positiveEndKey === authorKey) {
-    return [4, 4, 0, 0];
-  }
-  if (value < 0 && edgeByRow.negativeEndKey === authorKey) {
-    return [0, 0, 4, 4];
-  }
-  return [0, 0, 0, 0];
-}
-
 function findNearestNodeIndex(nodes, targetY) {
   let nearestIndex = 0;
   let nearestDistance = Number.POSITIVE_INFINITY;
@@ -1075,10 +1039,6 @@ export default function App() {
   const activeStackRows = barChartMode === 'commits'
     ? (isCommitPercentMode ? commitPercentRows : cumulativeRows.commitRows)
     : (showProjectPercent ? linePercentRows : cumulativeRows.lineRows);
-  const stackEdgeByRow = useMemo(
-    () => buildStackEdgeByRow(activeStackRows ?? [], authors),
-    [activeStackRows, authors]
-  );
   const isLinePercentMode = barChartMode === 'lines' && showProjectPercent;
   const isPercentMode = isCommitPercentMode || isLinePercentMode;
   const activeStackUnit = barChartMode === 'commits'
@@ -1237,15 +1197,10 @@ export default function App() {
                       fill={author.color}
                     >
                       {activeStackRows.map((row, index) => {
-                        const value = Number(row?.[author.key]) || 0;
                         return (
                           <Cell
                             key={`${author.key}-${row?.projectId ?? row?.projectLabel ?? index}`}
-                            radius={getStackBarCellRadius(
-                              value,
-                              stackEdgeByRow[index],
-                              author.key
-                            )}
+                            radius={[4, 4, 4, 4]}
                           />
                         );
                       })}
