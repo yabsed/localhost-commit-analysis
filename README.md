@@ -3,17 +3,24 @@
 - **2026 와커톤**에 참가한 팀들의 개발 레포지토리를 분석하기 위해 만든 **커밋 분석 도구**입니다.
 - **팀의 협업 흐름**과 **기여 패턴**을 시간축에서 읽을 수 있도록 설계했습니다.
 
+
 ![localhost-commit-analysis](./image.png)
 
-- 배포 주소: https://yabsed.github.io/localhost-commit-analysis
+## 프런트 배포 주소
+
+### **https://yabsed.github.io/localhost-commit-analysis**
+
 - 앱: `interactive_app` (React + Vite + Recharts)
 - 데이터 수집/병합: `commit_crawler` (Python)
 
 ## 배경
 
+
+![2026 와커톤](./와커톤.png)
+
 - 분석 대상: 2026 와커톤 참가자/참가팀 개발 레포지토리
 - 목적: 커밋 히스토리를 기반으로 팀별 협업 방식, 작성자 전환, 코드 기여 흐름을 정량적으로 확인
-- 2026 와커톤에 대하여: https://jet-coral-9d0.notion.site/2026-2e770e37e9c7801e8994e43d9ae6a3cf
+- 2026 와커톤 소개: https://jet-coral-9d0.notion.site/2026-2e770e37e9c7801e8994e43d9ae6a3cf
 
 ## 주요 기능
 
