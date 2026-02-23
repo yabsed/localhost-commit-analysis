@@ -14,5 +14,6 @@
 # https://github.com/jangjinuite/aicupid-frontend.git
 # jangjinuite/aicupid-backend -> backend
 
-https://github.com/qdrptd/soundmark_front
-https://github.com/goyangwoody/soundmark-back
+
+https://github.com/h-seo-n/wackathon-front
+https://github.com/mjy926/wackathon-server
