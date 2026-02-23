@@ -235,7 +235,7 @@ function commitLength(node) {
   return (Number(node.additions) || 0) + (Number(node.deletions) || 0);
 }
 
-function buildTopLongestCommitIdSet(nodes, topPercent = 0.05) {
+function buildTopLongestCommitIdSet(nodes, topPercent = 0.1) {
   if (!Array.isArray(nodes) || nodes.length === 0 || topPercent <= 0) {
     return new Set();
   }
@@ -475,10 +475,10 @@ export default function App() {
   const authors = prepared?.authors ?? [];
   const authorByKey = prepared?.authorByKey ?? {};
   const timeline = prepared?.timeline;
-  const applyTopLongCommitFilter = barChartMode === 'lines' && excludeTopLongCommits;
+  const applyTopLongCommitFilter = excludeTopLongCommits;
 
   const topLongestCommitIds = useMemo(
-    () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], 0.05),
+    () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], 0.1),
     [timeline]
   );
 
@@ -754,8 +754,8 @@ export default function App() {
               </Group>
             </Group>
             <div className="stack-chart-option-slot">
-              {barChartMode === 'lines' && (
-                <Group gap="lg">
+              <Group gap="lg">
+                {barChartMode === 'lines' && (
                   <Checkbox
                     size="sm"
                     color="dark"
@@ -763,15 +763,15 @@ export default function App() {
                     onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
                     label="삭제(-)를 빼서 보기"
                   />
-                  <Checkbox
-                    size="sm"
-                    color="dark"
-                    checked={excludeTopLongCommits}
-                    onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
-                    label="레포별 상위 5% 긴 커밋 제외"
-                  />
-                </Group>
-              )}
+                )}
+                <Checkbox
+                  size="sm"
+                  color="dark"
+                  checked={excludeTopLongCommits}
+                  onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
+                  label="레포별 상위 10% 긴 커밋 제외"
+                />
+              </Group>
             </div>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
