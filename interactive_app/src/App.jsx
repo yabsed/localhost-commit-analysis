@@ -9,6 +9,7 @@ import {
   Loader,
   Modal,
   Paper,
+  Select,
   Stack,
   Text,
   Textarea,
@@ -506,7 +507,11 @@ function findNearestNodeIndex(nodes, targetY) {
 export default function App() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [fileListLoading, setFileListLoading] = useState(true);
+  const [refreshingFileList, setRefreshingFileList] = useState(false);
   const [error, setError] = useState('');
+  const [logFiles, setLogFiles] = useState([]);
+  const [selectedLogFile, setSelectedLogFile] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
   const [focusLineY, setFocusLineY] = useState(0);
@@ -531,13 +536,63 @@ export default function App() {
     [draftIdentityRulesText]
   );
 
-  useEffect(() => {
-    let mounted = true;
+  const loadLogFiles = useCallback(async ({ preserveSelection = true, manual = false } = {}) => {
+    if (manual) {
+      setRefreshingFileList(true);
+    } else {
+      setFileListLoading(true);
+    }
 
+    try {
+      const res = await fetch('/api/commit-logs');
+      if (!res.ok) {
+        throw new Error(`파일 목록 로드 실패: ${res.status}`);
+      }
+
+      const data = await res.json();
+      const files = Array.isArray(data?.files) ? data.files : [];
+      setLogFiles(files);
+
+      if (files.length === 0) {
+        setSelectedLogFile(null);
+        setPayload(null);
+        setError('선택 가능한 JSON 파일이 없습니다. commit_crawler/json을 확인하세요.');
+        return;
+      }
+
+      setSelectedLogFile((current) => {
+        if (preserveSelection && current && files.some((item) => item.name === current)) {
+          return current;
+        }
+        return files[0].name;
+      });
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (manual) {
+        setRefreshingFileList(false);
+      } else {
+        setFileListLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLogFiles();
+  }, [loadLogFiles]);
+
+  useEffect(() => {
+    if (!selectedLogFile) {
+      setLoading(false);
+      return;
+    }
+
+    let mounted = true;
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch('/merged_git_logs.json');
+        const res = await fetch(`/api/commit-log?file=${encodeURIComponent(selectedLogFile)}`);
         if (!res.ok) {
           throw new Error(`데이터 로드 실패: ${res.status}`);
         }
@@ -561,7 +616,20 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [selectedLogFile]);
+
+  const selectedLogFileMeta = useMemo(
+    () => logFiles.find((item) => item.name === selectedLogFile) ?? null,
+    [logFiles, selectedLogFile]
+  );
+
+  const logFileOptions = useMemo(
+    () => logFiles.map((item) => ({
+      value: item.name,
+      label: item.name,
+    })),
+    [logFiles]
+  );
 
   const prepared = useMemo(() => {
     if (!payload) {
@@ -969,7 +1037,7 @@ export default function App() {
   const ignoredRuleCount = identityRules.invalidLines.length;
   const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
 
-  if (loading) {
+  if (loading || fileListLoading) {
     return (
       <div className="center-screen">
         <Loader color="dark" size="lg" />
@@ -1220,6 +1288,41 @@ export default function App() {
                   {selectedNode.authorName}
                 </Badge>
               </Group>
+            )}
+          </Paper>
+
+          <Paper withBorder radius="md" p="sm" mb="sm" className="source-select-box">
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Stack gap={2}>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Data Source</Text>
+                <Text size="sm" c="dimmed">
+                  `commit_crawler/json` 파일을 선택합니다.
+                </Text>
+              </Stack>
+              <Button
+                size="xs"
+                color="dark"
+                variant="default"
+                onClick={() => loadLogFiles({ preserveSelection: true, manual: true })}
+                loading={refreshingFileList}
+              >
+                목록 새로고침
+              </Button>
+            </Group>
+            <Select
+              mt="sm"
+              label="JSON 파일"
+              data={logFileOptions}
+              value={selectedLogFile}
+              onChange={(value) => setSelectedLogFile(value)}
+              searchable={false}
+              allowDeselect={false}
+              nothingFoundMessage="선택 가능한 파일이 없습니다."
+            />
+            {selectedLogFileMeta && (
+              <Text size="xs" c="dimmed" mt={6}>
+                수정 시각: {formatKoreanDateTime(selectedLogFileMeta.modifiedAtMs)}
+              </Text>
             )}
           </Paper>
 
