@@ -88,12 +88,12 @@ body {
 }
 
 .stack-chart-option-slot {
-  min-height: 28px;
+  min-height: 32px;
   margin-top: 2px;
   display: flex;
   align-items: center;
   overflow-x: auto;
-  overflow-y: hidden;
+  overflow-y: visible;
 }
 
 .stack-chart-option-group {

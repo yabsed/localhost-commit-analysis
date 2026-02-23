@@ -1444,6 +1444,15 @@ export default function App() {
                     placeholder="0"
                     value={topLongCommitPercentInput}
                     onChange={setTopLongCommitPercentInput}
+                    styles={{
+                      input: {
+                        height: 24,
+                        minHeight: 24,
+                        paddingTop: 0,
+                        paddingBottom: 0,
+                        textAlign: 'center',
+                      },
+                    }}
                   />
                   <Text size="sm">%)</Text>
                 </Group>
