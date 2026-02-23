@@ -13,12 +13,16 @@ import argparse
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 COMMIT_START_RE = re.compile(r"^commit (?P<hash>[0-9a-f]{40})\n", re.MULTILINE)
+CUTOFF_LOCAL_TZ = timezone(timedelta(hours=9))
+CUTOFF_DATETIME_LOCAL = datetime(2026, 2, 22, 9, 0, 0, tzinfo=CUTOFF_LOCAL_TZ)
+CUTOFF_DATETIME_UTC = CUTOFF_DATETIME_LOCAL.astimezone(timezone.utc)
+CUTOFF_TIMESTAMP_UNIX = CUTOFF_DATETIME_UTC.timestamp()
 
 
 def parse_args() -> argparse.Namespace:
@@ -111,13 +115,20 @@ def sha256_text(text: str, encoding: str) -> str:
     return hashlib.sha256(text.encode(encoding)).hexdigest()
 
 
+def is_after_cutoff(timestamp_unix: float | None) -> bool:
+    return timestamp_unix is not None and timestamp_unix > CUTOFF_TIMESTAMP_UNIX
+
+
 def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
+    dropped_after_cutoff_total = 0
 
     for source_order, path in enumerate(paths):
         text = path.read_text(encoding=encoding)
         prefix_text, blocks = split_log_text(text)
+        dropped_after_cutoff = 0
+        included_commit_count = 0
 
         source_entry: dict[str, Any] = {
             "source_file": str(path),
@@ -129,10 +140,13 @@ def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
             "prefix_sha256": sha256_text(prefix_text, encoding),
             "commit_count": len(blocks),
         }
-        sources.append(source_entry)
 
         for source_commit_index, raw_text in enumerate(blocks):
             parsed = extract_metadata_from_block(raw_text)
+            if is_after_cutoff(parsed["timestamp_unix"]):
+                dropped_after_cutoff += 1
+                continue
+
             entries.append(
                 {
                     "source_file": str(path),
@@ -147,9 +161,14 @@ def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
                     "raw_text": raw_text,
                 }
             )
+            included_commit_count += 1
 
         reconstructed = prefix_text + "".join(blocks)
         source_entry["lossless_check_passed"] = reconstructed == text
+        source_entry["included_commit_count"] = included_commit_count
+        source_entry["filtered_out_after_cutoff_count"] = dropped_after_cutoff
+        sources.append(source_entry)
+        dropped_after_cutoff_total += dropped_after_cutoff
 
     entries_sorted = sorted(
         entries,
@@ -170,8 +189,13 @@ def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
         "sort_order": "timestamp_utc_ascending",
         "note": (
             "Each entry keeps the full commit block in raw_text. "
-            "No source text is dropped during conversion."
+            "Commit blocks after 2026-02-22T09:00:00+09:00 are discarded."
         ),
+        "filters": {
+            "drop_after_local": CUTOFF_DATETIME_LOCAL.isoformat(),
+            "drop_after_utc": CUTOFF_DATETIME_UTC.isoformat().replace("+00:00", "Z"),
+            "dropped_entry_count": dropped_after_cutoff_total,
+        },
         "source_files": sources,
         "entries": entries_sorted,
     }
@@ -196,8 +220,16 @@ def main() -> None:
         status = "OK" if source["lossless_check_passed"] else "FAILED"
         print(
             f"- {source['source_file']}: commits={source['commit_count']}, "
+            f"included={source['included_commit_count']}, "
+            f"filtered_after_cutoff={source['filtered_out_after_cutoff_count']}, "
             f"lossless_check={status}"
         )
+    print(
+        "Cutoff filter: "
+        f"drop commits after {merged['filters']['drop_after_local']} "
+        f"({merged['filters']['drop_after_utc']}), "
+        f"dropped={merged['filters']['dropped_entry_count']}"
+    )
 
 
 if __name__ == "__main__":
