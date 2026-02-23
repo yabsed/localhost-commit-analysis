@@ -37,7 +37,6 @@ import {
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
-const PROJECT_LINE_DASHES = ['', '6 4', '3 4', '10 4'];
 
 function splitIdentityRuleLine(line) {
   const source = String(line || '').trim();
@@ -307,18 +306,18 @@ function buildProjectTrendRows(
   return rows;
 }
 
-function buildProjectTrendSeries(projects, commitRows, authors) {
+function buildProjectTrendSeries(projects, lineRows, authors) {
   const authorByKey = new Map(authors.map((author) => [author.key, author]));
 
   return projects.map((project, index) => {
-    const row = commitRows.find((item) => item.projectId === project.id);
+    const row = lineRows.find((item) => item.projectId === project.id);
     let topAuthorKey = null;
-    let topCommitCount = -1;
+    let topLineCount = -1;
 
     for (const author of authors) {
-      const commitCount = Number(row?.[author.key]) || 0;
-      if (commitCount > topCommitCount) {
-        topCommitCount = commitCount;
+      const lineCount = Number(row?.[author.key]) || 0;
+      if (lineCount > topLineCount) {
+        topLineCount = lineCount;
         topAuthorKey = author.key;
       }
     }
@@ -329,7 +328,6 @@ function buildProjectTrendSeries(projects, commitRows, authors) {
       label: project.label,
       key: `project_line_${index}`,
       stroke: topAuthor?.color ?? PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length],
-      dash: PROJECT_LINE_DASHES[index % PROJECT_LINE_DASHES.length],
     };
   });
 }
@@ -340,7 +338,6 @@ function buildAuthorTrendSeries(authors) {
     label: author.displayName,
     key: author.key,
     stroke: author.color,
-    dash: '',
   }));
 }
 
@@ -473,6 +470,7 @@ export default function App() {
     );
   }, [prepared, selectedId, visibleNodeCount]);
   const commitRows = prepared?.commitRows ?? [];
+  const lineRows = prepared?.lineRows ?? [];
   const projects = prepared?.projects ?? [];
   const authors = prepared?.authors ?? [];
   const authorByKey = prepared?.authorByKey ?? {};
@@ -612,8 +610,8 @@ export default function App() {
   }, [fullLineRows, subtractDeletions]);
 
   const projectTrendSeries = useMemo(
-    () => buildProjectTrendSeries(projects, commitRows, authors),
-    [projects, commitRows, authors]
+    () => buildProjectTrendSeries(projects, lineRows, authors),
+    [projects, lineRows, authors]
   );
 
   const projectTrendRows = useMemo(() => {
@@ -867,7 +865,6 @@ export default function App() {
                       name={series.label}
                       dataKey={series.key}
                       stroke={series.stroke}
-                      strokeDasharray={series.dash}
                       strokeWidth={2}
                       dot={false}
                       activeDot={{ r: 4 }}
