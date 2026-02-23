@@ -69,6 +69,10 @@ body {
   box-shadow: var(--shadow);
 }
 
+.legend-card {
+  box-shadow: none;
+}
+
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -118,41 +122,14 @@ body {
 .author-legend {
   display: flex;
   flex-wrap: wrap;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 8px;
-}
-
-.legend-item {
-  flex: 0 1 clamp(118px, 20vw, 170px);
-  min-width: 118px;
-  max-width: 170px;
-  display: grid;
-  grid-template-columns: 10px minmax(0, 1fr);
-  grid-template-areas:
-    'swatch name'
-    'swatch detail';
-  column-gap: 8px;
-  row-gap: 2px;
   align-items: center;
-  padding: 6px 8px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.56);
+  justify-content: flex-start;
+  gap: 6px 12px;
 }
 
-.legend-item .swatch {
-  grid-area: swatch;
-}
-
-.legend-item .mantine-Text-root:nth-of-type(1) {
-  grid-area: name;
+.author-name-item {
+  line-height: 1.2;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.legend-item .mantine-Text-root:nth-of-type(2) {
-  grid-area: detail;
 }
 
 .swatch {

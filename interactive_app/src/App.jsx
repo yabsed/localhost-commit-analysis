@@ -1967,20 +1967,17 @@ export default function App() {
           </div>
 
           <Paper withBorder radius="md" p="sm" mt="sm" className="legend-card">
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700} mb={6}>
-              Author Color Map
-            </Text>
             <div className="author-legend">
               {authors.map((author) => (
-                <div key={`timeline-author-legend-${author.key}`} className="legend-item">
-                  <span
-                    className="swatch"
-                    style={{ backgroundColor: author.color }}
-                    aria-hidden="true"
-                  />
-                  <Text size="sm" fw={600}>{author.displayName}</Text>
-                  <Text size="xs" c="dimmed">{author.color}</Text>
-                </div>
+                <Text
+                  key={`timeline-author-name-${author.key}`}
+                  size="sm"
+                  fw={700}
+                  className="author-name-item"
+                  style={{ color: author.color }}
+                >
+                  {author.displayName}
+                </Text>
               ))}
             </div>
           </Paper>
