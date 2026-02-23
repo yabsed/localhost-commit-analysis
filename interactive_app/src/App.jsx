@@ -3,6 +3,7 @@ import {
   Alert,
   Badge,
   Card,
+  Checkbox,
   Group,
   Loader,
   Paper,
@@ -21,6 +22,7 @@ import {
   Tooltip,
   XAxis,
   YAxis,
+  ReferenceLine,
 } from 'recharts';
 import {
   formatKoreanDateTime,
@@ -84,7 +86,7 @@ function selectedCommitText(node) {
   ].join(' ');
 }
 
-function buildCumulativeRows(projects, authors, nodes) {
+function buildCumulativeRows(projects, authors, nodes, subtractDeletions = false) {
   const commitRowsByProject = new Map();
   const lineRowsByProject = new Map();
 
@@ -121,8 +123,10 @@ function buildCumulativeRows(projects, authors, nodes) {
     commitRow.total += 1;
 
     const touchedLines = Number(node.touchedLines) || 0;
-    lineRow[node.authorKey] += touchedLines;
-    lineRow.total += touchedLines;
+    const netLines = (Number(node.additions) || 0) - (Number(node.deletions) || 0);
+    const lineValue = subtractDeletions ? netLines : touchedLines;
+    lineRow[node.authorKey] += lineValue;
+    lineRow.total += lineValue;
   }
 
   return {
@@ -137,6 +141,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
+  const [subtractDeletions, setSubtractDeletions] = useState(false);
   const timelineScrollRef = useRef(null);
 
   useEffect(() => {
@@ -260,21 +265,40 @@ export default function App() {
 
   const cumulativeRows = useMemo(() => {
     if (!timeline?.nodes?.length) {
-      return buildCumulativeRows(projects, authors, []);
+      return buildCumulativeRows(projects, authors, [], subtractDeletions);
     }
     const clampedCount = Math.max(0, Math.min(visibleNodeCount, timeline.nodes.length));
-    return buildCumulativeRows(projects, authors, timeline.nodes.slice(0, clampedCount));
-  }, [authors, projects, timeline, visibleNodeCount]);
+    return buildCumulativeRows(projects, authors, timeline.nodes.slice(0, clampedCount), subtractDeletions);
+  }, [authors, projects, timeline, visibleNodeCount, subtractDeletions]);
 
   const commitAxisMax = useMemo(
     () => Math.max(1, ...commitRows.map((row) => Number(row.total) || 0)),
     [commitRows]
   );
 
-  const lineAxisMax = useMemo(
-    () => Math.max(1, ...lineRows.map((row) => Number(row.total) || 0)),
-    [lineRows]
-  );
+  const netLineRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return buildCumulativeRows(projects, authors, [], true).lineRows;
+    }
+    return buildCumulativeRows(projects, authors, timeline.nodes, true).lineRows;
+  }, [authors, projects, timeline]);
+
+  const lineAxisDomain = useMemo(() => {
+    if (!subtractDeletions) {
+      const max = Math.max(1, ...lineRows.map((row) => Number(row.total) || 0));
+      return [0, max];
+    }
+
+    const totals = netLineRows.map((row) => Number(row.total) || 0);
+    const min = Math.min(0, ...totals);
+    const max = Math.max(0, ...totals);
+
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+
+    return [min, max];
+  }, [lineRows, netLineRows, subtractDeletions]);
 
   if (loading) {
     return (
@@ -344,23 +368,36 @@ export default function App() {
           </Card>
 
           <Card className="chart-card card-enter delay-3" radius="xl" p="lg" withBorder>
-            <Stack gap="xs">
-              <Title order={4}>라인 수 (프로젝트 x 작성자)</Title>
-              <Text size="sm" c="dimmed">
-                타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.
-              </Text>
-            </Stack>
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Stack gap="xs">
+                <Title order={4}>라인 수 (프로젝트 x 작성자)</Title>
+                <Text size="sm" c="dimmed">
+                  {subtractDeletions
+                    ? '타임라인 스크롤 위치까지의 누적 순증가 라인(+에서 -를 뺀 값)입니다.'
+                    : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.'}
+                </Text>
+              </Stack>
+              <Checkbox
+                size="sm"
+                checked={subtractDeletions}
+                onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
+                label="삭제(-)를 빼서 보기"
+              />
+            </Group>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={cumulativeRows.lineRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d6e3dc" />
                   <XAxis dataKey="projectLabel" />
-                  <YAxis allowDecimals={false} domain={[0, lineAxisMax]} />
+                  <YAxis allowDecimals={false} domain={lineAxisDomain} />
+                  {subtractDeletions && (
+                    <ReferenceLine y={0} stroke="#6b7d78" strokeDasharray="4 4" />
+                  )}
                   <Tooltip
                     content={
                       <StackedTooltip
                         authorByKey={authorByKey}
-                        unitLabel="line"
+                        unitLabel={subtractDeletions ? 'net line' : 'line'}
                       />
                     }
                   />
