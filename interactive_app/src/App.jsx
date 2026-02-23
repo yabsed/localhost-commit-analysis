@@ -357,28 +357,164 @@ function buildProjectTrendRows(
   return rows;
 }
 
+function solveMaxWeightAssignment(weightMatrix) {
+  const rowCount = weightMatrix.length;
+  const colCount = rowCount > 0 ? weightMatrix[0].length : 0;
+  if (rowCount === 0 || colCount === 0) {
+    return [];
+  }
+
+  const maxWeight = Math.max(
+    0,
+    ...weightMatrix.flatMap((row) => row.map((value) => Number(value) || 0))
+  );
+  const cost = weightMatrix.map((row) =>
+    row.map((value) => maxWeight - (Number(value) || 0))
+  );
+
+  // Hungarian algorithm (min-cost assignment) on a rectangular matrix where rowCount <= colCount.
+  const u = new Array(rowCount + 1).fill(0);
+  const v = new Array(colCount + 1).fill(0);
+  const p = new Array(colCount + 1).fill(0);
+  const way = new Array(colCount + 1).fill(0);
+
+  for (let i = 1; i <= rowCount; i += 1) {
+    p[0] = i;
+    let j0 = 0;
+    const minv = new Array(colCount + 1).fill(Number.POSITIVE_INFINITY);
+    const used = new Array(colCount + 1).fill(false);
+
+    do {
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = Number.POSITIVE_INFINITY;
+      let j1 = 0;
+
+      for (let j = 1; j <= colCount; j += 1) {
+        if (used[j]) {
+          continue;
+        }
+        const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) {
+          minv[j] = cur;
+          way[j] = j0;
+        }
+        if (minv[j] < delta) {
+          delta = minv[j];
+          j1 = j;
+        }
+      }
+
+      for (let j = 0; j <= colCount; j += 1) {
+        if (used[j]) {
+          u[p[j]] += delta;
+          v[j] -= delta;
+        } else {
+          minv[j] -= delta;
+        }
+      }
+
+      j0 = j1;
+    } while (p[j0] !== 0);
+
+    do {
+      const j1 = way[j0];
+      p[j0] = p[j1];
+      j0 = j1;
+    } while (j0 !== 0);
+  }
+
+  const assignment = new Array(rowCount).fill(-1);
+  for (let j = 1; j <= colCount; j += 1) {
+    if (p[j] > 0) {
+      assignment[p[j] - 1] = j - 1;
+    }
+  }
+  return assignment;
+}
+
 function buildProjectTrendSeries(projects, lineRows, authors) {
-  const authorByKey = new Map(authors.map((author) => [author.key, author]));
+  const rowByProjectId = new Map(lineRows.map((row) => [row.projectId, row]));
+  if (projects.length === 0) {
+    return [];
+  }
+
+  if (authors.length === 0) {
+    return projects.map((project, index) => ({
+      id: project.id,
+      label: project.label,
+      key: `project_line_${index}`,
+      stroke: PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length],
+    }));
+  }
+
+  const columnCount = Math.max(authors.length, projects.length);
+  const projectPriorityScores = new Array(projects.length).fill(1);
+  projects
+    .map((project, projectIndex) => ({
+      projectIndex,
+      totalLines: Math.max(0, Number(rowByProjectId.get(project.id)?.total) || 0),
+    }))
+    .sort((a, b) => (
+      b.totalLines - a.totalLines
+      || a.projectIndex - b.projectIndex
+    ))
+    .forEach((item, rankIndex) => {
+      projectPriorityScores[item.projectIndex] = projects.length - rankIndex;
+    });
+
+  const authorPreferenceScoresByProjectIndex = projects.map((project) => {
+    const row = rowByProjectId.get(project.id);
+    const preferenceScores = new Array(authors.length).fill(0);
+    authors
+      .map((author, authorIndex) => ({
+        authorIndex,
+        lineCount: Math.max(0, Number(row?.[author.key]) || 0),
+      }))
+      .sort((a, b) => (
+        b.lineCount - a.lineCount
+        || a.authorIndex - b.authorIndex
+      ))
+      .forEach((item, rankIndex) => {
+        preferenceScores[item.authorIndex] = authors.length - rankIndex;
+      });
+    return preferenceScores;
+  });
+
+  const maxTieBonus = projectPriorityScores.reduce(
+    (sum, priorityScore) => sum + priorityScore * authors.length,
+    0
+  );
+  const baseMultiplier = maxTieBonus + 1;
+
+  const weightMatrix = projects.map((project, projectIndex) => {
+    const row = rowByProjectId.get(project.id);
+    const weights = authors.map((author, authorIndex) => {
+      const rawWeight = Math.max(0, Number(row?.[author.key]) || 0);
+      const tieBonus = projectPriorityScores[projectIndex]
+        * (authorPreferenceScoresByProjectIndex[projectIndex][authorIndex] || 0);
+      return rawWeight * baseMultiplier + tieBonus;
+    });
+    while (weights.length < columnCount) {
+      weights.push(0);
+    }
+    return weights;
+  });
+  const assignment = solveMaxWeightAssignment(weightMatrix);
 
   return projects.map((project, index) => {
-    const row = lineRows.find((item) => item.projectId === project.id);
-    let topAuthorKey = null;
-    let topLineCount = Number.NEGATIVE_INFINITY;
+    const assignedColumn = assignment[index];
+    const selectedAuthor = assignedColumn >= 0 && assignedColumn < authors.length
+      ? authors[assignedColumn]
+      : null;
+    const stroke = selectedAuthor?.color
+      ?? PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length];
 
-    for (const author of authors) {
-      const lineCount = Number(row?.[author.key]) || 0;
-      if (lineCount > topLineCount) {
-        topLineCount = lineCount;
-        topAuthorKey = author.key;
-      }
-    }
-
-    const topAuthor = topAuthorKey ? authorByKey.get(topAuthorKey) : null;
     return {
       id: project.id,
       label: project.label,
       key: `project_line_${index}`,
-      stroke: topAuthor?.color ?? PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length],
+      stroke,
     };
   });
 }
