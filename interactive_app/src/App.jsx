@@ -8,6 +8,7 @@ import {
   Group,
   Loader,
   Modal,
+  NumberInput,
   Paper,
   Select,
   Stack,
@@ -39,6 +40,7 @@ import {
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
 const DEFAULT_IDENTITY_RULES_FILE = 'author_identity_rules.txt';
+const DEFAULT_TOP_LONG_COMMIT_PERCENT = 15;
 const DATA_SOURCE_QUERY_KEY = 'source';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
 
@@ -708,6 +710,9 @@ export default function App() {
   const [subtractDeletions, setSubtractDeletions] = useState(false);
   const [showProjectPercent, setShowProjectPercent] = useState(false);
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
+  const [topLongCommitPercentInput, setTopLongCommitPercentInput] = useState(
+    String(DEFAULT_TOP_LONG_COMMIT_PERCENT)
+  );
   const [barChartMode, setBarChartMode] = useState('commits');
   const [trendScope, setTrendScope] = useState('byProject');
   const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
@@ -958,10 +963,20 @@ export default function App() {
   const timeline = prepared?.timeline;
   const applyTopLongCommitFilter = excludeTopLongCommits;
   const applyZeroLengthCommitFilter = barChartMode === 'commits' && subtractDeletions;
+  const topLongCommitPercent = useMemo(() => {
+    if (topLongCommitPercentInput === '') {
+      return 0;
+    }
+    const parsed = Number(topLongCommitPercentInput);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, parsed));
+  }, [topLongCommitPercentInput]);
 
   const topLongestCommitIds = useMemo(
-    () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], 0.1),
-    [timeline]
+    () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], topLongCommitPercent / 100),
+    [timeline, topLongCommitPercent]
   );
 
   const zeroLengthCommitIds = useMemo(
@@ -1401,7 +1416,7 @@ export default function App() {
               </Group>
             </Group>
             <div className="stack-chart-option-slot">
-              <Group gap="lg">
+              <Group gap="xs" wrap="nowrap" className="stack-chart-option-group">
                 <Checkbox
                   size="sm"
                   color="dark"
@@ -1410,14 +1425,28 @@ export default function App() {
                   onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
                   label="레포 기여율(%)"
                 />
-                <Checkbox
-                  size="sm"
-                  color="dark"
-                  radius={0}
-                  checked={excludeTopLongCommits}
-                  onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
-                  label="긴 커밋 제외(상위 10%)"
-                />
+                <Group gap={6} wrap="nowrap">
+                  <Checkbox
+                    size="sm"
+                    color="dark"
+                    radius={0}
+                    checked={excludeTopLongCommits}
+                    onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
+                    label="긴 커밋 제외(상위"
+                  />
+                  <NumberInput
+                    size="xs"
+                    w={52}
+                    min={0}
+                    max={100}
+                    step={1}
+                    hideControls
+                    placeholder="0"
+                    value={topLongCommitPercentInput}
+                    onChange={setTopLongCommitPercentInput}
+                  />
+                  <Text size="sm">%)</Text>
+                </Group>
                 <Checkbox
                   size="sm"
                   color="dark"
