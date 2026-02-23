@@ -18,6 +18,8 @@ import {
 } from '@mantine/core';
 import {
   IconAlertCircle,
+  IconMoon,
+  IconSun,
 } from '@tabler/icons-react';
 import {
   Bar,
@@ -42,7 +44,8 @@ const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
 const DEFAULT_IDENTITY_RULES_FILE = 'author_identity_rules.txt';
 const DEFAULT_TOP_LONG_COMMIT_PERCENT = 15;
 const DATA_SOURCE_QUERY_KEY = 'source';
-const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const PROJECT_LINE_FALLBACK_STROKES_LIGHT = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const PROJECT_LINE_FALLBACK_STROKES_DARK = ['#e6e6e6', '#b9c0cf', '#8e98aa', '#727b8b'];
 const STATIC_DATA_MANIFEST_PATH = 'data/manifest.json';
 const IS_STATIC_BUILD = import.meta.env.PROD;
 
@@ -465,7 +468,12 @@ function solveMaxWeightAssignment(weightMatrix) {
   return assignment;
 }
 
-function buildProjectTrendSeries(projects, lineRows, authors) {
+function buildProjectTrendSeries(
+  projects,
+  lineRows,
+  authors,
+  fallbackStrokes = PROJECT_LINE_FALLBACK_STROKES_LIGHT
+) {
   const rowByProjectId = new Map(lineRows.map((row) => [row.projectId, row]));
   if (projects.length === 0) {
     return [];
@@ -476,7 +484,7 @@ function buildProjectTrendSeries(projects, lineRows, authors) {
       id: project.id,
       label: project.label,
       key: `project_line_${index}`,
-      stroke: PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length],
+      stroke: fallbackStrokes[index % fallbackStrokes.length],
     }));
   }
 
@@ -540,7 +548,7 @@ function buildProjectTrendSeries(projects, lineRows, authors) {
       ? authors[assignedColumn]
       : null;
     const stroke = selectedAuthor?.color
-      ?? PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length];
+      ?? fallbackStrokes[index % fallbackStrokes.length];
 
     return {
       id: project.id,
@@ -806,7 +814,7 @@ function scaleTimelineToViewport(timeline, viewportWidth) {
   };
 }
 
-export default function App() {
+export default function App({ colorScheme = 'light', onToggleColorScheme = () => {} }) {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [fileListLoading, setFileListLoading] = useState(true);
@@ -838,6 +846,13 @@ export default function App() {
   const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
   const timelineScrollRef = useRef(null);
   const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
+  const isDarkMode = colorScheme === 'dark';
+  const actionButtonColor = isDarkMode ? 'gray' : 'dark';
+  const chartGridStroke = isDarkMode ? '#474b57' : '#d3d3d3';
+  const chartReferenceStroke = isDarkMode ? '#7e8694' : '#8f8f8f';
+  const projectLineFallbackStrokes = isDarkMode
+    ? PROJECT_LINE_FALLBACK_STROKES_DARK
+    : PROJECT_LINE_FALLBACK_STROKES_LIGHT;
 
   const identityRules = useMemo(
     () => parseIdentityRules(identityRulesText),
@@ -1358,8 +1373,8 @@ export default function App() {
   }, [cumulativeRows.commitRows, authors]);
 
   const projectTrendSeries = useMemo(
-    () => buildProjectTrendSeries(projects, lineRows, authors),
-    [projects, lineRows, authors]
+    () => buildProjectTrendSeries(projects, lineRows, authors, projectLineFallbackStrokes),
+    [projects, lineRows, authors, projectLineFallbackStrokes]
   );
 
   const projectTrendRows = useMemo(() => {
@@ -1541,7 +1556,7 @@ export default function App() {
   if (loading || fileListLoading) {
     return (
       <div className="center-screen">
-        <Loader color="dark" size="lg" />
+        <Loader color={actionButtonColor} size="lg" />
         <Text size="sm" c="dimmed">커밋 데이터를 불러오는 중...</Text>
       </div>
     );
@@ -1586,7 +1601,7 @@ export default function App() {
               <Group gap="xs">
                 <Button
                   size="xs"
-                  color="dark"
+                  color={actionButtonColor}
                   radius={0}
                   variant={barChartMode === 'commits' ? 'filled' : 'default'}
                   onClick={() => setBarChartMode('commits')}
@@ -1595,7 +1610,7 @@ export default function App() {
                 </Button>
                 <Button
                   size="xs"
-                  color="dark"
+                  color={actionButtonColor}
                   radius={0}
                   variant={barChartMode === 'lines' ? 'filled' : 'default'}
                   onClick={() => setBarChartMode('lines')}
@@ -1608,7 +1623,7 @@ export default function App() {
               <Group gap="xs" wrap="nowrap" className="stack-chart-option-group">
                 <Checkbox
                   size="sm"
-                  color="dark"
+                  color={actionButtonColor}
                   radius={0}
                   checked={showProjectPercent}
                   onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
@@ -1617,7 +1632,7 @@ export default function App() {
                 <Group gap={6} wrap="nowrap">
                   <Checkbox
                     size="sm"
-                    color="dark"
+                    color={actionButtonColor}
                     radius={0}
                     checked={excludeTopLongCommits}
                     onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
@@ -1647,7 +1662,7 @@ export default function App() {
                 </Group>
                 <Checkbox
                   size="sm"
-                  color="dark"
+                  color={actionButtonColor}
                   radius={0}
                   checked={subtractDeletions}
                   onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
@@ -1662,7 +1677,7 @@ export default function App() {
                   stackOffset="sign"
                   margin={{ top: 20, right: 10, left: 0, bottom: 10 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                   <XAxis dataKey="projectLabel" />
                   <YAxis
                     allowDecimals={isPercentMode}
@@ -1670,7 +1685,7 @@ export default function App() {
                     tickFormatter={isPercentMode ? (value) => `${Math.round(Number(value) || 0)}%` : undefined}
                   />
                   {barChartMode === 'lines' && subtractDeletions && (
-                    <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
+                    <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                   )}
                   <Tooltip
                     content={
@@ -1715,7 +1730,7 @@ export default function App() {
                 <Group gap="xs">
                   <Button
                     size="xs"
-                    color="dark"
+                    color={actionButtonColor}
                     variant={trendScope === 'byProject' ? 'filled' : 'default'}
                     onClick={() => setTrendScope('byProject')}
                   >
@@ -1723,7 +1738,7 @@ export default function App() {
                   </Button>
                   <Button
                     size="xs"
-                    color="dark"
+                    color={actionButtonColor}
                     variant={trendScope === 'byAuthor' ? 'filled' : 'default'}
                     onClick={() => setTrendScope('byAuthor')}
                   >
@@ -1735,7 +1750,7 @@ export default function App() {
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                   <XAxis
                     dataKey="timestampMs"
                     type="number"
@@ -1751,10 +1766,10 @@ export default function App() {
                       : undefined}
                   />
                   {!showProjectPercent && trendMetric === 'code' && subtractDeletions && (
-                    <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
+                    <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                   )}
                   {selectedTrendPoint && (
-                    <ReferenceLine x={selectedTrendPoint.timestampMs} stroke="#8f8f8f" strokeDasharray="4 4" />
+                    <ReferenceLine x={selectedTrendPoint.timestampMs} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                   )}
                   <Tooltip
                     labelFormatter={(value) => formatKoreanDateTime(value)}
@@ -1802,7 +1817,16 @@ export default function App() {
               )}
               <Button
                 size="xs"
-                color="dark"
+                color={actionButtonColor}
+                variant="default"
+                onClick={onToggleColorScheme}
+                leftSection={isDarkMode ? <IconSun size={14} /> : <IconMoon size={14} />}
+              >
+                {isDarkMode ? '라이트 모드' : '다크 모드'}
+              </Button>
+              <Button
+                size="xs"
+                color={actionButtonColor}
                 variant="default"
                 onClick={() => setIsDataSourceModalOpen(true)}
                 title={selectedLogFile ?? '데이터 소스'}
@@ -1811,7 +1835,7 @@ export default function App() {
               </Button>
               <Button
                 size="xs"
-                color="dark"
+                color={actionButtonColor}
                 variant="default"
                 onClick={() => {
                   setDraftIdentityRulesText(identityRulesText);
@@ -1835,7 +1859,7 @@ export default function App() {
                   styles={{
                     root: {
                       backgroundColor: `${selectedNode.authorColor}26`,
-                      color: '#111111',
+                      color: 'var(--text-main)',
                       borderColor: `${selectedNode.authorColor}66`,
                     },
                   }}
@@ -2018,7 +2042,7 @@ export default function App() {
             >
               목록 새로고침
             </Button>
-            <Button color="dark" onClick={() => setIsDataSourceModalOpen(false)}>
+            <Button color={actionButtonColor} onClick={() => setIsDataSourceModalOpen(false)}>
               닫기
             </Button>
           </Group>
@@ -2108,7 +2132,7 @@ export default function App() {
                 취소
               </Button>
               <Button
-                color="dark"
+                color={actionButtonColor}
                 onClick={() => {
                   setIdentityRulesText(draftIdentityRulesText);
                   setIsIdentityModalOpen(false);
