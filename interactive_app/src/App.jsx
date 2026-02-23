@@ -103,7 +103,14 @@ function parseIdentityRules(rawText = '') {
   };
 }
 
-function StackedTooltip({ active, payload, label, authorByKey, unitLabel }) {
+function StackedTooltip({
+  active,
+  payload,
+  label,
+  authorByKey,
+  unitLabel,
+  valueFormatter = formatNumber,
+}) {
   if (!active || !payload || payload.length === 0) {
     return null;
   }
@@ -128,7 +135,7 @@ function StackedTooltip({ active, payload, label, authorByKey, unitLabel }) {
                 />
                 <Text size="sm">{author?.displayName ?? item.dataKey}</Text>
               </Group>
-              <Text size="sm" fw={700}>{formatNumber(item.value)} {unitLabel}</Text>
+              <Text size="sm" fw={700}>{valueFormatter(item.value)} {unitLabel}</Text>
             </Group>
           );
         })}
@@ -276,6 +283,20 @@ function buildTopLongestCommitIdSet(nodes, topPercent = 0.1) {
   return excludedIds;
 }
 
+function buildZeroLengthCommitIdSet(nodes) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return new Set();
+  }
+
+  const excludedIds = new Set();
+  for (const node of nodes) {
+    if (commitLength(node) === 0) {
+      excludedIds.add(node.id);
+    }
+  }
+  return excludedIds;
+}
+
 function buildProjectTrendRows(
   nodes,
   projects,
@@ -394,6 +415,7 @@ export default function App() {
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
   const [focusLineY, setFocusLineY] = useState(0);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
+  const [showProjectPercent, setShowProjectPercent] = useState(false);
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
   const [barChartMode, setBarChartMode] = useState('commits');
   const [trendScope, setTrendScope] = useState('byProject');
@@ -476,13 +498,41 @@ export default function App() {
   const authorByKey = prepared?.authorByKey ?? {};
   const timeline = prepared?.timeline;
   const applyTopLongCommitFilter = excludeTopLongCommits;
+  const applyZeroLengthCommitFilter = barChartMode === 'commits' && subtractDeletions;
 
   const topLongestCommitIds = useMemo(
     () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], 0.1),
     [timeline]
   );
 
-  const activeExcludedCommitIds = applyTopLongCommitFilter ? topLongestCommitIds : null;
+  const zeroLengthCommitIds = useMemo(
+    () => buildZeroLengthCommitIdSet(timeline?.nodes ?? []),
+    [timeline]
+  );
+
+  const activeExcludedCommitIds = useMemo(() => {
+    if (!applyTopLongCommitFilter && !applyZeroLengthCommitFilter) {
+      return null;
+    }
+
+    const excluded = new Set();
+    if (applyTopLongCommitFilter) {
+      for (const id of topLongestCommitIds) {
+        excluded.add(id);
+      }
+    }
+    if (applyZeroLengthCommitFilter) {
+      for (const id of zeroLengthCommitIds) {
+        excluded.add(id);
+      }
+    }
+    return excluded;
+  }, [
+    applyTopLongCommitFilter,
+    applyZeroLengthCommitFilter,
+    topLongestCommitIds,
+    zeroLengthCommitIds,
+  ]);
 
   const applySelection = useCallback((nodes, selectedIndex) => {
     if (!Array.isArray(nodes) || nodes.length === 0) {
@@ -605,9 +655,75 @@ export default function App() {
     if (min === max) {
       return [min - 1, max + 1];
     }
-
     return [min, max];
   }, [fullLineRows, subtractDeletions]);
+
+  const linePercentRows = useMemo(() => {
+    const baseRows = cumulativeRows.lineRows ?? [];
+
+    return baseRows.map((row) => {
+      const positiveTotal = authors.reduce((sum, author) => {
+        const value = Number(row[author.key]) || 0;
+        return value > 0 ? sum + value : sum;
+      }, 0);
+
+      if (!Number.isFinite(positiveTotal) || positiveTotal <= 0) {
+        const emptyRow = {
+          projectId: row.projectId,
+          projectLabel: row.projectLabel,
+          total: 0,
+        };
+        for (const author of authors) {
+          emptyRow[author.key] = 0;
+        }
+        return emptyRow;
+      }
+
+      const nextRow = {
+        projectId: row.projectId,
+        projectLabel: row.projectLabel,
+        total: 100,
+      };
+
+      for (const author of authors) {
+        const value = Number(row[author.key]) || 0;
+        nextRow[author.key] = value > 0 ? (value / positiveTotal) * 100 : 0;
+      }
+      return nextRow;
+    });
+  }, [cumulativeRows.lineRows, authors]);
+
+  const linePercentAxisDomain = useMemo(() => [0, 100], []);
+
+  const commitPercentRows = useMemo(() => {
+    const baseRows = cumulativeRows.commitRows ?? [];
+
+    return baseRows.map((row) => {
+      const commitTotal = Number(row.total) || 0;
+      if (!Number.isFinite(commitTotal) || commitTotal <= 0) {
+        const emptyRow = {
+          projectId: row.projectId,
+          projectLabel: row.projectLabel,
+          total: 0,
+        };
+        for (const author of authors) {
+          emptyRow[author.key] = 0;
+        }
+        return emptyRow;
+      }
+
+      const nextRow = {
+        projectId: row.projectId,
+        projectLabel: row.projectLabel,
+        total: 100,
+      };
+      for (const author of authors) {
+        const value = Number(row[author.key]) || 0;
+        nextRow[author.key] = (value / commitTotal) * 100;
+      }
+      return nextRow;
+    });
+  }, [cumulativeRows.commitRows, authors]);
 
   const projectTrendSeries = useMemo(
     () => buildProjectTrendSeries(projects, lineRows, authors),
@@ -673,17 +789,29 @@ export default function App() {
     return activeTrendRows[index];
   }, [activeTrendRows, visibleNodeCount]);
 
-  const activeStackRows = barChartMode === 'commits' ? cumulativeRows.commitRows : cumulativeRows.lineRows;
+  const isCommitPercentMode = barChartMode === 'commits' && showProjectPercent;
+  const activeStackRows = barChartMode === 'commits'
+    ? (isCommitPercentMode ? commitPercentRows : cumulativeRows.commitRows)
+    : (showProjectPercent ? linePercentRows : cumulativeRows.lineRows);
+  const isLinePercentMode = barChartMode === 'lines' && showProjectPercent;
+  const isPercentMode = isCommitPercentMode || isLinePercentMode;
   const activeStackUnit = barChartMode === 'commits'
-    ? 'commit'
-    : (subtractDeletions ? 'net line' : 'line');
+    ? (isCommitPercentMode ? '%' : 'commit')
+    : (isLinePercentMode ? '%' : (subtractDeletions ? 'net line' : 'line'));
   const activeStackTitle = barChartMode === 'commits'
     ? '커밋 수 (프로젝트 x 작성자)'
     : '라인 수 (프로젝트 x 작성자)';
   const activeStackDescription = barChartMode === 'commits'
-    ? '타임라인 스크롤 위치까지의 누적 커밋 수입니다.'
+    ? (isCommitPercentMode
+      ? '타임라인 스크롤 위치까지의 누적 커밋 비율입니다.'
+      : '타임라인 스크롤 위치까지의 누적 커밋 수입니다.')
     : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.';
-  const activeStackDomain = barChartMode === 'commits' ? [0, commitAxisMax] : lineAxisDomain;
+  const activeStackDomain = barChartMode === 'commits'
+    ? (isCommitPercentMode ? [0, 100] : [0, commitAxisMax])
+    : (isLinePercentMode ? linePercentAxisDomain : lineAxisDomain);
+  const activeStackValueFormatter = isPercentMode
+    ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+    : formatNumber;
   const trendUnitLabel = trendMetric === 'commits'
     ? '커밋 수'
     : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)');
@@ -755,21 +883,26 @@ export default function App() {
             </Group>
             <div className="stack-chart-option-slot">
               <Group gap="lg">
-                {barChartMode === 'lines' && (
-                  <Checkbox
-                    size="sm"
-                    color="dark"
-                    checked={subtractDeletions}
-                    onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
-                    label="삭제(-)를 빼서 보기"
-                  />
-                )}
+                <Checkbox
+                  size="sm"
+                  color="dark"
+                  checked={showProjectPercent}
+                  onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
+                  label="레포 내 비율(%)"
+                />
                 <Checkbox
                   size="sm"
                   color="dark"
                   checked={excludeTopLongCommits}
                   onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
-                  label="레포별 상위 10% 긴 커밋 제외"
+                  label="레포별 상위 10% 제외"
+                />
+                <Checkbox
+                  size="sm"
+                  color="dark"
+                  checked={subtractDeletions}
+                  onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
+                  label={barChartMode === 'commits' ? '길이가 0인 commit 제외' : '삭제 제외(-)'}
                 />
               </Group>
             </div>
@@ -778,7 +911,11 @@ export default function App() {
                 <BarChart data={activeStackRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis dataKey="projectLabel" />
-                  <YAxis allowDecimals={false} domain={activeStackDomain} />
+                  <YAxis
+                    allowDecimals={isPercentMode}
+                    domain={activeStackDomain}
+                    tickFormatter={isPercentMode ? (value) => `${Math.round(Number(value) || 0)}%` : undefined}
+                  />
                   {barChartMode === 'lines' && subtractDeletions && (
                     <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
                   )}
@@ -787,6 +924,7 @@ export default function App() {
                       <StackedTooltip
                         authorByKey={authorByKey}
                         unitLabel={activeStackUnit}
+                        valueFormatter={activeStackValueFormatter}
                       />
                     }
                   />
