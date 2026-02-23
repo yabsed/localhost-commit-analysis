@@ -49,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional commit limit per repository for crawling.",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-crawl repositories even if output txt files already exist.",
+    )
+    parser.add_argument(
         "--encoding",
         default="utf-8",
         help="Encoding for merge stage (default: utf-8).",
@@ -93,6 +98,8 @@ def main() -> None:
         ]
         if args.max_count is not None:
             crawl_cmd.extend(["--max-count", str(args.max_count)])
+        if args.force:
+            crawl_cmd.append("--force")
 
         run_step(crawl_cmd, "Crawl git logs")
 

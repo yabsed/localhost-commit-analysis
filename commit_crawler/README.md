@@ -14,8 +14,12 @@ python3 commit_crawler.py
 
 This runs the full pipeline:
 
-- crawl: `input.txt -> commit_crawler/<repo>.txt`
+- crawl: `input.txt -> commit_crawler/<owner>/<repo>.txt` (remote 기준)
+- crawl(local): `input.txt -> commit_crawler/_local/<repo>.txt`
 - merge: `*.txt -> commit_crawler/merged_git_logs.json`
+
+If a target `.txt` already exists, crawler reuses it and skips clone/log fetch.
+Use `--force` to refresh.
 
 ## Input formats
 
@@ -31,6 +35,7 @@ This runs the full pipeline:
 - `--output-json <path>`: merged JSON output path (default: `commit_crawler/merged_git_logs.json`)
 - `--max-count <n>`: limit commits per repository for test runs
 - `--encoding <name>`: merge encoding (default: `utf-8`)
+- `--force`: existing `.txt` 무시하고 다시 크롤링
 
 ## Worker scripts
 

@@ -5,6 +5,7 @@
 # - https://github.com/owner/repo.git
 # - https://github.com/owner/repo
 # - owner/repo
+# (saved as commit_crawler/owner/repo.txt)
 #
 # Local paths are also supported for compatibility.
 #

@@ -103,6 +103,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional commit limit per repository (default: no limit).",
     )
     parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-crawl even if target output text already exists.",
+    )
+    parser.add_argument(
         "--manifest",
         type=Path,
         default=None,
@@ -165,6 +170,27 @@ def normalize_remote_spec(repo_spec: str) -> str:
     if re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", repo_spec):
         return f"https://github.com/{repo_spec}.git"
     return repo_spec
+
+
+def remote_repo_parts(repo_spec: str) -> tuple[str, str]:
+    source = repo_spec.strip().rstrip("/")
+
+    if source.startswith("git@") and ":" in source:
+        path_part = source.split(":", 1)[1]
+    else:
+        parsed = urlparse(source)
+        path_part = parsed.path if parsed.path else source
+
+    path_part = path_part.strip("/")
+    if path_part.endswith(".git"):
+        path_part = path_part[:-4]
+
+    parts = [sanitize_name(part) for part in path_part.split("/") if part.strip()]
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    if len(parts) == 1:
+        return "unknown", parts[0]
+    return "unknown", "repo"
 
 
 def remote_repo_name(repo_spec: str) -> str:
@@ -232,17 +258,19 @@ def sanitize_name(name: str) -> str:
     return cleaned or "repo"
 
 
-def choose_output_name(base_name: str, used: set[str]) -> str:
-    stem = sanitize_name(base_name)
-    candidate = f"{stem}.txt"
+def build_remote_output_path(repo_spec: str, output_dir: Path) -> Path:
+    owner, repo = remote_repo_parts(repo_spec)
+    return output_dir / owner / f"{repo}.txt"
 
-    index = 2
-    while candidate in used:
-        candidate = f"{stem}_{index}.txt"
-        index += 1
 
-    used.add(candidate)
-    return candidate
+def build_local_output_path(repo_path: Path, output_dir: Path) -> Path:
+    return output_dir / "_local" / f"{sanitize_name(repo_path.name)}.txt"
+
+
+def should_reuse_output(path: Path, force: bool) -> bool:
+    if force:
+        return False
+    return path.exists() and path.is_file() and path.stat().st_size > 0
 
 
 def count_commits(repo_path: Path) -> int | None:
@@ -441,7 +469,7 @@ def main() -> None:
 
     failures: list[str] = []
     generated_files: list[Path] = []
-    used_names: set[str] = set()
+    seen_output_paths: set[Path] = set()
     progress = ProgressReporter()
 
     print(f"Input file: {input_path}")
@@ -452,10 +480,17 @@ def main() -> None:
         if is_remote_repo_spec(repo_spec):
             remote_url = normalize_remote_spec(repo_spec)
             repo_label = remote_repo_name(repo_spec)
-            output_name = choose_output_name(repo_label, used_names)
-            output_path = output_dir / output_name
+            output_path = build_remote_output_path(repo_spec, output_dir)
+
+            if should_reuse_output(output_path, args.force):
+                if output_path not in seen_output_paths:
+                    generated_files.append(output_path)
+                    seen_output_paths.add(output_path)
+                print(f"[SKIP] {repo_spec} -> {output_path} (already exists)")
+                continue
 
             try:
+                output_path.parent.mkdir(parents=True, exist_ok=True)
                 with tempfile.TemporaryDirectory(prefix="commit_crawler_") as temp_dir:
                     repo_path = clone_remote_repo(
                         remote_url,
@@ -480,7 +515,9 @@ def main() -> None:
                 print(f"[FAIL] {repo_spec} -> {error}", file=sys.stderr)
                 continue
 
-            generated_files.append(output_path)
+            if output_path not in seen_output_paths:
+                generated_files.append(output_path)
+                seen_output_paths.add(output_path)
             print(f"[OK] {repo_spec} -> {output_path}")
             continue
 
@@ -497,10 +534,17 @@ def main() -> None:
             continue
 
         repo_label = repo_path.name or repo_spec
-        output_name = choose_output_name(repo_label, used_names)
-        output_path = output_dir / output_name
+        output_path = build_local_output_path(repo_path, output_dir)
+
+        if should_reuse_output(output_path, args.force):
+            if output_path not in seen_output_paths:
+                generated_files.append(output_path)
+                seen_output_paths.add(output_path)
+            print(f"[SKIP] {repo_spec} -> {output_path} (already exists)")
+            continue
 
         try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
             write_git_log(
                 repo_path,
                 output_path,
@@ -516,7 +560,9 @@ def main() -> None:
             print(f"[FAIL] {repo_spec} -> {error}", file=sys.stderr)
             continue
 
-        generated_files.append(output_path)
+        if output_path not in seen_output_paths:
+            generated_files.append(output_path)
+            seen_output_paths.add(output_path)
         print(f"[OK] {repo_spec} -> {output_path}")
 
     if args.manifest is not None:
