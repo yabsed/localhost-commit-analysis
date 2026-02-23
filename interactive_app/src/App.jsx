@@ -36,7 +36,7 @@ import {
 } from './logData';
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
-const PROJECT_LINE_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
 const PROJECT_LINE_DASHES = ['', '6 4', '3 4', '10 4'];
 
 function splitIdentityRuleLine(line) {
@@ -160,7 +160,13 @@ function selectedCommitText(node) {
   ].join(' ');
 }
 
-function buildCumulativeRows(projects, authors, nodes, subtractDeletions = false) {
+function buildCumulativeRows(
+  projects,
+  authors,
+  nodes,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
   const commitRowsByProject = new Map();
   const lineRowsByProject = new Map();
 
@@ -186,6 +192,10 @@ function buildCumulativeRows(projects, authors, nodes, subtractDeletions = false
   }
 
   for (const node of nodes) {
+    if (excludedCommitIds?.has(node.id)) {
+      continue;
+    }
+
     const commitRow = commitRowsByProject.get(node.projectId);
     const lineRow = lineRowsByProject.get(node.projectId);
 
@@ -218,32 +228,67 @@ function trendDelta(node, metric, subtractDeletions = false) {
     : Number(node.touchedLines) || 0;
 }
 
-function buildTrendRows(nodes, metric, subtractDeletions = false) {
-  let cumulative = 0;
-  return nodes.map((node, index) => {
-    const delta = trendDelta(node, metric, subtractDeletions);
-    cumulative += delta;
-    return {
-      index,
-      timestampMs: Number(node.timestampMs) || 0,
-      label: formatKoreanDateTime(node.timestampMs),
-      cumulative,
-    };
-  });
+function commitLength(node) {
+  const touched = Number(node.touchedLines);
+  if (Number.isFinite(touched) && touched >= 0) {
+    return touched;
+  }
+  return (Number(node.additions) || 0) + (Number(node.deletions) || 0);
 }
 
-function buildProjectTrendRows(nodes, projects, metric, subtractDeletions = false) {
-  const projectLines = projects.map((project, index) => ({
-    id: project.id,
-    label: project.label,
-    key: `project_line_${index}`,
-    stroke: PROJECT_LINE_STROKES[index % PROJECT_LINE_STROKES.length],
-    dash: PROJECT_LINE_DASHES[index % PROJECT_LINE_DASHES.length],
-  }));
+function buildTopLongestCommitIdSet(nodes, topPercent = 0.05) {
+  if (!Array.isArray(nodes) || nodes.length === 0 || topPercent <= 0) {
+    return new Set();
+  }
 
-  const totalsByProjectId = Object.fromEntries(projectLines.map((line) => [line.id, 0]));
+  const byProject = new Map();
+  for (const node of nodes) {
+    const projectId = node.projectId ?? '__unknown_project__';
+    if (!byProject.has(projectId)) {
+      byProject.set(projectId, []);
+    }
+    byProject.get(projectId).push(node);
+  }
+
+  const excludedIds = new Set();
+  for (const projectNodes of byProject.values()) {
+    const removeCount = Math.ceil(projectNodes.length * topPercent);
+    if (removeCount <= 0) {
+      continue;
+    }
+
+    const ranked = projectNodes
+      .map((node) => ({
+        id: node.id,
+        length: commitLength(node),
+        timestampMs: Number(node.timestampMs) || 0,
+      }))
+      .sort((a, b) => (
+        b.length - a.length
+        || b.timestampMs - a.timestampMs
+        || String(a.id).localeCompare(String(b.id))
+      ));
+
+    for (const item of ranked.slice(0, removeCount)) {
+      excludedIds.add(item.id);
+    }
+  }
+
+  return excludedIds;
+}
+
+function buildProjectTrendRows(
+  nodes,
+  projects,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  const totalsByProjectId = Object.fromEntries(projects.map((line) => [line.id, 0]));
   const rows = nodes.map((node, index) => {
-    const delta = trendDelta(node, metric, subtractDeletions);
+    const delta = excludedCommitIds?.has(node.id)
+      ? 0
+      : trendDelta(node, metric, subtractDeletions);
     totalsByProjectId[node.projectId] = (Number(totalsByProjectId[node.projectId]) || 0) + delta;
 
     const row = {
@@ -252,14 +297,81 @@ function buildProjectTrendRows(nodes, projects, metric, subtractDeletions = fals
       label: formatKoreanDateTime(node.timestampMs),
     };
 
-    for (const projectLine of projectLines) {
+    for (const projectLine of projects) {
       row[projectLine.key] = Number(totalsByProjectId[projectLine.id]) || 0;
     }
 
     return row;
   });
 
-  return { rows, projectLines };
+  return rows;
+}
+
+function buildProjectTrendSeries(projects, commitRows, authors) {
+  const authorByKey = new Map(authors.map((author) => [author.key, author]));
+
+  return projects.map((project, index) => {
+    const row = commitRows.find((item) => item.projectId === project.id);
+    let topAuthorKey = null;
+    let topCommitCount = -1;
+
+    for (const author of authors) {
+      const commitCount = Number(row?.[author.key]) || 0;
+      if (commitCount > topCommitCount) {
+        topCommitCount = commitCount;
+        topAuthorKey = author.key;
+      }
+    }
+
+    const topAuthor = topAuthorKey ? authorByKey.get(topAuthorKey) : null;
+    return {
+      id: project.id,
+      label: project.label,
+      key: `project_line_${index}`,
+      stroke: topAuthor?.color ?? PROJECT_LINE_FALLBACK_STROKES[index % PROJECT_LINE_FALLBACK_STROKES.length],
+      dash: PROJECT_LINE_DASHES[index % PROJECT_LINE_DASHES.length],
+    };
+  });
+}
+
+function buildAuthorTrendSeries(authors) {
+  return authors.map((author) => ({
+    id: author.id,
+    label: author.displayName,
+    key: author.key,
+    stroke: author.color,
+    dash: '',
+  }));
+}
+
+function buildAuthorTrendRows(
+  nodes,
+  authorSeries,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  const totalsByAuthorKey = Object.fromEntries(authorSeries.map((line) => [line.key, 0]));
+  return nodes.map((node, index) => {
+    const delta = excludedCommitIds?.has(node.id)
+      ? 0
+      : trendDelta(node, metric, subtractDeletions);
+    if (node.authorKey && Object.prototype.hasOwnProperty.call(totalsByAuthorKey, node.authorKey)) {
+      totalsByAuthorKey[node.authorKey] += delta;
+    }
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+    };
+
+    for (const authorLine of authorSeries) {
+      row[authorLine.key] = Number(totalsByAuthorKey[authorLine.key]) || 0;
+    }
+
+    return row;
+  });
 }
 
 function findNearestNodeIndex(nodes, targetY) {
@@ -285,13 +397,14 @@ export default function App() {
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
   const [focusLineY, setFocusLineY] = useState(0);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
+  const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
   const [barChartMode, setBarChartMode] = useState('commits');
-  const [trendMetric, setTrendMetric] = useState('commits');
-  const [trendScope, setTrendScope] = useState('combined');
+  const [trendScope, setTrendScope] = useState('byProject');
   const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
   const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
   const timelineScrollRef = useRef(null);
+  const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
 
   const identityRules = useMemo(
     () => parseIdentityRules(identityRulesText),
@@ -360,11 +473,18 @@ export default function App() {
     );
   }, [prepared, selectedId, visibleNodeCount]);
   const commitRows = prepared?.commitRows ?? [];
-  const lineRows = prepared?.lineRows ?? [];
   const projects = prepared?.projects ?? [];
   const authors = prepared?.authors ?? [];
   const authorByKey = prepared?.authorByKey ?? {};
   const timeline = prepared?.timeline;
+  const applyTopLongCommitFilter = barChartMode === 'lines' && excludeTopLongCommits;
+
+  const topLongestCommitIds = useMemo(
+    () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], 0.05),
+    [timeline]
+  );
+
+  const activeExcludedCommitIds = applyTopLongCommitFilter ? topLongestCommitIds : null;
 
   const applySelection = useCallback((nodes, selectedIndex) => {
     if (!Array.isArray(nodes) || nodes.length === 0) {
@@ -432,31 +552,55 @@ export default function App() {
 
   const cumulativeRows = useMemo(() => {
     if (!timeline?.nodes?.length) {
-      return buildCumulativeRows(projects, authors, [], subtractDeletions);
+      return buildCumulativeRows(
+        projects,
+        authors,
+        [],
+        subtractDeletions,
+        activeExcludedCommitIds
+      );
     }
     const clampedCount = Math.max(0, Math.min(visibleNodeCount, timeline.nodes.length));
-    return buildCumulativeRows(projects, authors, timeline.nodes.slice(0, clampedCount), subtractDeletions);
-  }, [authors, projects, timeline, visibleNodeCount, subtractDeletions]);
+    return buildCumulativeRows(
+      projects,
+      authors,
+      timeline.nodes.slice(0, clampedCount),
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [authors, projects, timeline, visibleNodeCount, subtractDeletions, activeExcludedCommitIds]);
 
   const commitAxisMax = useMemo(
     () => Math.max(1, ...commitRows.map((row) => Number(row.total) || 0)),
     [commitRows]
   );
 
-  const netLineRows = useMemo(() => {
+  const fullLineRows = useMemo(() => {
     if (!timeline?.nodes?.length) {
-      return buildCumulativeRows(projects, authors, [], true).lineRows;
+      return buildCumulativeRows(
+        projects,
+        authors,
+        [],
+        subtractDeletions,
+        activeExcludedCommitIds
+      ).lineRows;
     }
-    return buildCumulativeRows(projects, authors, timeline.nodes, true).lineRows;
-  }, [authors, projects, timeline]);
+    return buildCumulativeRows(
+      projects,
+      authors,
+      timeline.nodes,
+      subtractDeletions,
+      activeExcludedCommitIds
+    ).lineRows;
+  }, [authors, projects, timeline, subtractDeletions, activeExcludedCommitIds]);
 
   const lineAxisDomain = useMemo(() => {
     if (!subtractDeletions) {
-      const max = Math.max(1, ...lineRows.map((row) => Number(row.total) || 0));
+      const max = Math.max(1, ...fullLineRows.map((row) => Number(row.total) || 0));
       return [0, max];
     }
 
-    const totals = netLineRows.map((row) => Number(row.total) || 0);
+    const totals = fullLineRows.map((row) => Number(row.total) || 0);
     const min = Math.min(0, ...totals);
     const max = Math.max(0, ...totals);
 
@@ -465,34 +609,55 @@ export default function App() {
     }
 
     return [min, max];
-  }, [lineRows, netLineRows, subtractDeletions]);
+  }, [fullLineRows, subtractDeletions]);
 
-  const totalTrendRows = useMemo(() => {
+  const projectTrendSeries = useMemo(
+    () => buildProjectTrendSeries(projects, commitRows, authors),
+    [projects, commitRows, authors]
+  );
+
+  const projectTrendRows = useMemo(() => {
     if (!timeline?.nodes?.length) {
       return [];
     }
-    return buildTrendRows(timeline.nodes, trendMetric, subtractDeletions);
-  }, [timeline, trendMetric, subtractDeletions]);
+    return buildProjectTrendRows(
+      timeline.nodes,
+      projectTrendSeries,
+      trendMetric,
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [timeline, projectTrendSeries, trendMetric, subtractDeletions, activeExcludedCommitIds]);
 
-  const projectTrend = useMemo(() => {
+  const authorTrendSeries = useMemo(
+    () => buildAuthorTrendSeries(authors),
+    [authors]
+  );
+
+  const authorTrendRows = useMemo(() => {
     if (!timeline?.nodes?.length) {
-      return { rows: [], projectLines: [] };
+      return [];
     }
-    return buildProjectTrendRows(timeline.nodes, projects, trendMetric, subtractDeletions);
-  }, [timeline, projects, trendMetric, subtractDeletions]);
+    return buildAuthorTrendRows(
+      timeline.nodes,
+      authorTrendSeries,
+      trendMetric,
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [timeline, authorTrendSeries, trendMetric, subtractDeletions, activeExcludedCommitIds]);
 
-  const activeTrendRows = trendScope === 'combined' ? totalTrendRows : projectTrend.rows;
+  const activeTrendRows = trendScope === 'byProject' ? projectTrendRows : authorTrendRows;
+  const activeTrendSeries = trendScope === 'byProject' ? projectTrendSeries : authorTrendSeries;
 
   const trendDomain = useMemo(() => {
     if (activeTrendRows.length === 0) {
       return [0, 1];
     }
 
-    const values = trendScope === 'combined'
-      ? activeTrendRows.map((row) => Number(row.cumulative) || 0)
-      : activeTrendRows.flatMap((row) =>
-        projectTrend.projectLines.map((line) => Number(row[line.key]) || 0)
-      );
+    const values = activeTrendRows.flatMap((row) =>
+      activeTrendSeries.map((line) => Number(row[line.key]) || 0)
+    );
 
     const min = Math.min(...values);
     const max = Math.max(...values);
@@ -500,7 +665,7 @@ export default function App() {
       return [min - 1, max + 1];
     }
     return [min, max];
-  }, [activeTrendRows, trendScope, projectTrend.projectLines]);
+  }, [activeTrendRows, activeTrendSeries]);
 
   const selectedTrendPoint = useMemo(() => {
     if (activeTrendRows.length === 0) {
@@ -519,16 +684,14 @@ export default function App() {
     : '라인 수 (프로젝트 x 작성자)';
   const activeStackDescription = barChartMode === 'commits'
     ? '타임라인 스크롤 위치까지의 누적 커밋 수입니다.'
-    : (subtractDeletions
-      ? '타임라인 스크롤 위치까지의 누적 순증가 라인(+에서 -를 뺀 값)입니다.'
-      : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.');
+    : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.';
   const activeStackDomain = barChartMode === 'commits' ? [0, commitAxisMax] : lineAxisDomain;
   const trendUnitLabel = trendMetric === 'commits'
     ? '커밋 수'
-    : (subtractDeletions ? '코드 길이(추가-삭제)' : '코드 길이(추가+삭제)');
-  const trendDescription = trendScope === 'combined'
-    ? `시간에 따른 누적 ${trendUnitLabel}입니다.`
-    : `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`;
+    : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)');
+  const trendDescription = trendScope === 'byProject'
+    ? `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`
+    : `시간에 따른 사용자별 누적 ${trendUnitLabel}입니다.`;
 
   const ignoredRuleCount = identityRules.invalidLines.length;
   const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
@@ -567,9 +730,9 @@ export default function App() {
         <div className="pane-scroll">
           <Card className="chart-card card-enter delay-2" radius="xl" p="lg" withBorder>
             <Group justify="space-between" align="flex-start" wrap="wrap">
-              <Stack gap="xs">
+              <Stack gap="xs" className="stack-chart-copy">
                 <Title order={4}>{activeStackTitle}</Title>
-                <Text size="sm" c="dimmed">
+                <Text size="sm" c="dimmed" className="stack-chart-description">
                   {activeStackDescription}
                 </Text>
               </Stack>
@@ -592,16 +755,26 @@ export default function App() {
                 </Button>
               </Group>
             </Group>
-            {barChartMode === 'lines' && (
-              <Checkbox
-                mt="xs"
-                size="sm"
-                color="dark"
-                checked={subtractDeletions}
-                onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
-                label="삭제(-)를 빼서 보기"
-              />
-            )}
+            <div className="stack-chart-option-slot">
+              {barChartMode === 'lines' && (
+                <Group gap="lg">
+                  <Checkbox
+                    size="sm"
+                    color="dark"
+                    checked={subtractDeletions}
+                    onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
+                    label="삭제(-)를 빼서 보기"
+                  />
+                  <Checkbox
+                    size="sm"
+                    color="dark"
+                    checked={excludeTopLongCommits}
+                    onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
+                    label="레포별 상위 5% 긴 커밋 제외"
+                  />
+                </Group>
+              )}
+            </div>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={activeStackRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
@@ -646,50 +819,22 @@ export default function App() {
                   <Button
                     size="xs"
                     color="dark"
-                    variant={trendMetric === 'commits' ? 'filled' : 'default'}
-                    onClick={() => setTrendMetric('commits')}
-                  >
-                    커밋 수
-                  </Button>
-                  <Button
-                    size="xs"
-                    color="dark"
-                    variant={trendMetric === 'code' ? 'filled' : 'default'}
-                    onClick={() => setTrendMetric('code')}
-                  >
-                    코드 길이
-                  </Button>
-                </Group>
-                <Group gap="xs">
-                  <Button
-                    size="xs"
-                    color="dark"
-                    variant={trendScope === 'combined' ? 'filled' : 'default'}
-                    onClick={() => setTrendScope('combined')}
-                  >
-                    통합
-                  </Button>
-                  <Button
-                    size="xs"
-                    color="dark"
                     variant={trendScope === 'byProject' ? 'filled' : 'default'}
                     onClick={() => setTrendScope('byProject')}
                   >
                     레포별
                   </Button>
+                  <Button
+                    size="xs"
+                    color="dark"
+                    variant={trendScope === 'byAuthor' ? 'filled' : 'default'}
+                    onClick={() => setTrendScope('byAuthor')}
+                  >
+                    사용자별
+                  </Button>
                 </Group>
               </Stack>
             </Group>
-            {trendMetric === 'code' && (
-              <Checkbox
-                mt="xs"
-                size="sm"
-                color="dark"
-                checked={subtractDeletions}
-                onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
-                label="삭제(-)를 빼서 보기"
-              />
-            )}
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
@@ -712,38 +857,22 @@ export default function App() {
                     labelFormatter={(value) => formatKoreanDateTime(value)}
                     formatter={(value, name) => [
                       formatNumber(value),
-                      trendScope === 'combined'
-                        ? (trendMetric === 'commits'
-                          ? '누적 커밋'
-                          : (subtractDeletions ? '누적 코드 길이(추가-삭제)' : '누적 코드 길이(추가+삭제)'))
-                        : name,
+                      name,
                     ]}
                   />
-                  {trendScope === 'combined' ? (
+                  {activeTrendSeries.map((series) => (
                     <Line
+                      key={series.key}
                       type="monotone"
-                      name="전체 레포"
-                      dataKey="cumulative"
-                      stroke="#111111"
+                      name={series.label}
+                      dataKey={series.key}
+                      stroke={series.stroke}
+                      strokeDasharray={series.dash}
                       strokeWidth={2}
                       dot={false}
                       activeDot={{ r: 4 }}
                     />
-                  ) : (
-                    projectTrend.projectLines.map((projectLine) => (
-                      <Line
-                        key={projectLine.key}
-                        type="monotone"
-                        name={projectLine.label}
-                        dataKey={projectLine.key}
-                        stroke={projectLine.stroke}
-                        strokeDasharray={projectLine.dash}
-                        strokeWidth={2}
-                        dot={false}
-                        activeDot={{ r: 4 }}
-                      />
-                    ))
-                  )}
+                  ))}
                 </LineChart>
               </ResponsiveContainer>
             </div>
