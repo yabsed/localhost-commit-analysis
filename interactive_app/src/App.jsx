@@ -726,6 +726,86 @@ function findNearestNodeIndex(nodes, targetY) {
   return nearestIndex;
 }
 
+function buildTimelinePath(fromNode, toNode) {
+  if (fromNode.x === toNode.x) {
+    return `M ${fromNode.x} ${fromNode.y} L ${toNode.x} ${toNode.y}`;
+  }
+
+  const deltaY = toNode.y - fromNode.y;
+  const control1Y = fromNode.y + deltaY * 0.35;
+  const control2Y = toNode.y - deltaY * 0.35;
+
+  return [
+    `M ${fromNode.x} ${fromNode.y}`,
+    `C ${fromNode.x} ${control1Y}, ${toNode.x} ${control2Y}, ${toNode.x} ${toNode.y}`,
+  ].join(' ');
+}
+
+function scaleTimelineToViewport(timeline, viewportWidth) {
+  if (!timeline) {
+    return null;
+  }
+
+  const baseWidth = Number(timeline.width) || 0;
+  const targetWidth = Number(viewportWidth) || 0;
+
+  if (baseWidth <= 0 || targetWidth <= 0 || baseWidth <= targetWidth) {
+    return {
+      ...timeline,
+      laneLabelWidth: 176,
+      laneLabelHeight: 34,
+      laneLabelFontSize: 14,
+    };
+  }
+
+  const scaleX = targetWidth / baseWidth;
+  const clampedPillScale = Math.max(0.6, scaleX);
+  const clampedFontScale = Math.max(0.8, scaleX);
+  const laneLabelWidth = Math.max(102, Math.min(176, Math.round(176 * clampedPillScale)));
+  const laneLabelHeight = Math.max(28, Math.min(34, Math.round(34 * clampedPillScale)));
+  const laneLabelFontSize = Math.max(11, Math.min(14, 14 * clampedFontScale));
+
+  const scaledLanes = timeline.lanes.map((lane) => ({
+    ...lane,
+    x: (Number(lane?.x) || 0) * scaleX,
+  }));
+  const laneById = new Map(scaledLanes.map((lane) => [lane.id, lane]));
+
+  const scaledNodes = timeline.nodes.map((node) => ({
+    ...node,
+    x: (Number(node?.x) || 0) * scaleX,
+    lane: node.lane ? laneById.get(node.lane.id) ?? node.lane : node.lane,
+  }));
+  const nodeById = new Map(scaledNodes.map((node) => [node.id, node]));
+
+  const remapEdges = (edges = []) => edges.flatMap((edge) => {
+    const from = nodeById.get(edge?.from?.id);
+    const to = nodeById.get(edge?.to?.id);
+    if (!from || !to) {
+      return [];
+    }
+    return [{
+      ...edge,
+      from,
+      to,
+      path: buildTimelinePath(from, to),
+    }];
+  });
+
+  return {
+    ...timeline,
+    width: targetWidth,
+    lanes: scaledLanes,
+    nodes: scaledNodes,
+    projectEdges: remapEdges(timeline.projectEdges),
+    precedenceEdges: remapEdges(timeline.precedenceEdges),
+    authorEdges: remapEdges(timeline.authorEdges),
+    laneLabelWidth,
+    laneLabelHeight,
+    laneLabelFontSize,
+  };
+}
+
 export default function App() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -755,6 +835,7 @@ export default function App() {
   const [identityRuleFileError, setIdentityRuleFileError] = useState('');
   const [isDataSourceModalOpen, setIsDataSourceModalOpen] = useState(false);
   const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
   const timelineScrollRef = useRef(null);
   const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
 
@@ -1424,6 +1505,39 @@ export default function App() {
   const ignoredRuleCount = identityRules.invalidLines.length;
   const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
 
+  const responsiveTimeline = useMemo(
+    () => scaleTimelineToViewport(timeline, timelineViewportWidth),
+    [timeline, timelineViewportWidth]
+  );
+
+  useEffect(() => {
+    const scrollElement = timelineScrollRef.current;
+    if (!scrollElement || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const updateWidth = () => {
+      const nextWidth = Math.max(0, Math.floor(scrollElement.clientWidth));
+      setTimelineViewportWidth((prev) => (prev === nextWidth ? prev : nextWidth));
+    };
+
+    updateWidth();
+
+    let observer;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateWidth);
+      observer.observe(scrollElement);
+    }
+    window.addEventListener('resize', updateWidth);
+
+    return () => {
+      if (observer) {
+        observer.disconnect();
+      }
+      window.removeEventListener('resize', updateWidth);
+    };
+  }, [timeline]);
+
   if (loading || fileListLoading) {
     return (
       <div className="center-screen">
@@ -1451,6 +1565,11 @@ export default function App() {
   if (!prepared || !timeline) {
     return null;
   }
+
+  const laneLabelWidth = responsiveTimeline?.laneLabelWidth ?? 176;
+  const laneLabelHeight = responsiveTimeline?.laneLabelHeight ?? 34;
+  const laneLabelFontSize = responsiveTimeline?.laneLabelFontSize ?? 14;
+  const laneLabelY = 18 + laneLabelHeight / 2 + laneLabelFontSize * 0.35;
 
   return (
     <main className="app-shell">
@@ -1729,9 +1848,9 @@ export default function App() {
 
           <div className="timeline-scroll" ref={timelineScrollRef}>
             <svg
-              width={timeline.width}
-              height={timeline.height}
-              viewBox={`0 0 ${timeline.width} ${timeline.height}`}
+              width={responsiveTimeline?.width ?? timeline.width}
+              height={responsiveTimeline?.height ?? timeline.height}
+              viewBox={`0 0 ${responsiveTimeline?.width ?? timeline.width} ${responsiveTimeline?.height ?? timeline.height}`}
               className="timeline-canvas"
               role="img"
               aria-label="Commit timeline"
@@ -1750,35 +1869,36 @@ export default function App() {
                 </marker>
               </defs>
 
-              {timeline.lanes.map((lane) => (
+              {(responsiveTimeline?.lanes ?? timeline.lanes).map((lane) => (
                 <g key={lane.id}>
                   <line
                     x1={lane.x}
-                    y1={timeline.topPadding - 30}
+                    y1={(responsiveTimeline?.topPadding ?? timeline.topPadding) - 30}
                     x2={lane.x}
-                    y2={timeline.height - 32}
+                    y2={(responsiveTimeline?.height ?? timeline.height) - 32}
                     className="timeline-lane-line"
                   />
                   <rect
-                    x={lane.x - 88}
-                    y={18}
-                    width={176}
-                    height={34}
+                    x={lane.x - laneLabelWidth / 2}
+                    y={18 + (34 - laneLabelHeight) / 2}
+                    width={laneLabelWidth}
+                    height={laneLabelHeight}
                     rx={12}
                     className="timeline-lane-pill"
                   />
                   <text
                     x={lane.x}
-                    y={40}
+                    y={laneLabelY}
                     textAnchor="middle"
                     className="timeline-lane-label"
+                    style={{ fontSize: laneLabelFontSize }}
                   >
                     {lane.label}
                   </text>
                 </g>
               ))}
 
-              {timeline.precedenceEdges.map((edge, index) => (
+              {(responsiveTimeline?.precedenceEdges ?? timeline.precedenceEdges).map((edge, index) => (
                 <path
                   key={`precedence-${index}`}
                   d={edge.path}
@@ -1787,7 +1907,7 @@ export default function App() {
                 />
               ))}
 
-              {timeline.projectEdges.map((edge, index) => (
+              {(responsiveTimeline?.projectEdges ?? timeline.projectEdges).map((edge, index) => (
                 <path
                   key={`project-${index}`}
                   d={edge.path}
@@ -1795,7 +1915,7 @@ export default function App() {
                 />
               ))}
 
-              {timeline.authorEdges.map((edge, index) => (
+              {(responsiveTimeline?.authorEdges ?? timeline.authorEdges).map((edge, index) => (
                 <path
                   key={`author-${index}`}
                   d={edge.path}
@@ -1809,14 +1929,14 @@ export default function App() {
                   <line
                     x1={24}
                     y1={focusLineY}
-                    x2={timeline.width - 24}
+                    x2={(responsiveTimeline?.width ?? timeline.width) - 24}
                     y2={focusLineY}
                     className="timeline-focus-line"
                   />
                 </g>
               )}
 
-              {timeline.nodes.map((node, index) => {
+              {(responsiveTimeline?.nodes ?? timeline.nodes).map((node, index) => {
                 const isSelected = selectedNode?.id === node.id;
                 return (
                   <g
