@@ -14,5 +14,5 @@
 # https://github.com/jangjinuite/aicupid-frontend.git
 # jangjinuite/aicupid-backend -> backend
 
-https://github.com/s3mng/meet_you
-https://github.com/swfs0417/gimmary
+https://github.com/qdrptd/soundmark_front
+https://github.com/goyangwoody/soundmark-back

@@ -1616,8 +1616,9 @@ export default function App() {
                 color="dark"
                 variant="default"
                 onClick={() => setIsDataSourceModalOpen(true)}
+                title={selectedLogFile ?? '데이터 소스'}
               >
-                데이터 소스
+                {selectedLogFile ?? '데이터 소스'}
               </Button>
               <Button
                 size="xs"
