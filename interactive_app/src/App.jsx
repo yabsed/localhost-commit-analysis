@@ -37,6 +37,9 @@ import {
 
 const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const TREND_OVERLAP_BUCKET_DIGITS = 3;
+const TREND_OVERLAP_STEP_RATIO = 0.0035;
+const TREND_OVERLAP_MIN_STEP = 0.15;
 
 function splitIdentityRuleLine(line) {
   const source = String(line || '').trim();
@@ -389,6 +392,164 @@ function buildAuthorTrendRows(
     }
 
     return row;
+  });
+}
+
+function buildPercentTrendRows(
+  nodes,
+  projects,
+  authors,
+  projectSeries,
+  authorSeries,
+  trendScope,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return [];
+  }
+
+  const totalsByProjectId = new Map();
+  for (const project of projects) {
+    const authorTotals = {};
+    for (const author of authors) {
+      authorTotals[author.key] = 0;
+    }
+    totalsByProjectId.set(project.id, authorTotals);
+  }
+
+  return nodes.map((node, index) => {
+    if (!excludedCommitIds?.has(node.id)) {
+      const delta = trendDelta(node, metric, subtractDeletions);
+      const authorTotals = totalsByProjectId.get(node.projectId);
+      if (
+        authorTotals
+        && node.authorKey
+        && Object.prototype.hasOwnProperty.call(authorTotals, node.authorKey)
+      ) {
+        authorTotals[node.authorKey] += delta;
+      }
+    }
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+    };
+
+    if (trendScope === 'byProject') {
+      const positiveByProjectId = new Map();
+      let allProjectPositiveTotal = 0;
+
+      for (const project of projects) {
+        const authorTotals = totalsByProjectId.get(project.id);
+        const projectPositiveTotal = authors.reduce((sum, author) => {
+          const value = Number(authorTotals?.[author.key]) || 0;
+          return value > 0 ? sum + value : sum;
+        }, 0);
+        positiveByProjectId.set(project.id, projectPositiveTotal);
+        allProjectPositiveTotal += projectPositiveTotal;
+      }
+
+      for (const series of projectSeries) {
+        const projectPositiveTotal = Number(positiveByProjectId.get(series.id)) || 0;
+        row[series.key] = allProjectPositiveTotal > 0
+          ? (projectPositiveTotal / allProjectPositiveTotal) * 100
+          : 0;
+      }
+      return row;
+    }
+
+    for (const authorLine of authorSeries) {
+      row[authorLine.key] = 0;
+    }
+
+    for (const project of projects) {
+      const authorTotals = totalsByProjectId.get(project.id);
+      const positiveTotal = authors.reduce((sum, author) => {
+        const value = Number(authorTotals?.[author.key]) || 0;
+        return value > 0 ? sum + value : sum;
+      }, 0);
+      if (positiveTotal <= 0) {
+        continue;
+      }
+
+      for (const authorLine of authorSeries) {
+        const value = Number(authorTotals?.[authorLine.key]) || 0;
+        if (value > 0) {
+          row[authorLine.key] += (value / positiveTotal) * 100;
+        }
+      }
+    }
+
+    for (const authorLine of authorSeries) {
+      row[authorLine.key] = Math.max(0, Number(row[authorLine.key]) || 0);
+    }
+
+    return row;
+  });
+}
+
+function buildNonOverlappingTrendRows(rows, series, domain, enabled = false) {
+  if (!enabled || !Array.isArray(rows) || rows.length === 0) {
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  const seriesKeys = Array.isArray(series) ? series.map((item) => item.key) : [];
+  if (seriesKeys.length <= 1) {
+    return rows;
+  }
+
+  const lowerBound = Number(Array.isArray(domain) ? domain[0] : 0);
+  const upperBound = Number(Array.isArray(domain) ? domain[1] : 100);
+  const range = Math.max(1, upperBound - lowerBound);
+  const offsetStep = Math.max(TREND_OVERLAP_MIN_STEP, range * TREND_OVERLAP_STEP_RATIO);
+
+  return rows.map((row) => {
+    const nextRow = { ...row };
+    const groups = new Map();
+
+    for (const key of seriesKeys) {
+      const rawValue = Number(row[key]) || 0;
+      nextRow[`${key}__raw`] = rawValue;
+      const bucket = rawValue.toFixed(TREND_OVERLAP_BUCKET_DIGITS);
+      if (!groups.has(bucket)) {
+        groups.set(bucket, []);
+      }
+      groups.get(bucket).push({ key, rawValue });
+    }
+
+    for (const entries of groups.values()) {
+      if (entries.length === 1) {
+        nextRow[entries[0].key] = entries[0].rawValue;
+        continue;
+      }
+
+      const baseValue = entries[0].rawValue;
+      const center = (entries.length - 1) / 2;
+      let offsets = entries.map((_, index) => (index - center) * offsetStep);
+
+      let minOffset = Math.min(...offsets);
+      let maxOffset = Math.max(...offsets);
+
+      if (baseValue + maxOffset > upperBound) {
+        const shiftDown = (baseValue + maxOffset) - upperBound;
+        offsets = offsets.map((offset) => offset - shiftDown);
+        minOffset -= shiftDown;
+      }
+
+      if (baseValue + minOffset < lowerBound) {
+        const shiftUp = lowerBound - (baseValue + minOffset);
+        offsets = offsets.map((offset) => offset + shiftUp);
+      }
+
+      entries.forEach((entry, index) => {
+        nextRow[entry.key] = entry.rawValue + offsets[index];
+      });
+    }
+
+    return nextRow;
   });
 }
 
@@ -761,10 +922,55 @@ export default function App() {
     );
   }, [timeline, authorTrendSeries, trendMetric, subtractDeletions, activeExcludedCommitIds]);
 
-  const activeTrendRows = trendScope === 'byProject' ? projectTrendRows : authorTrendRows;
+  const trendPercentRows = useMemo(() => {
+    if (!showProjectPercent || !timeline?.nodes?.length) {
+      return [];
+    }
+    return buildPercentTrendRows(
+      timeline.nodes,
+      projects,
+      authors,
+      projectTrendSeries,
+      authorTrendSeries,
+      trendScope,
+      trendMetric,
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [
+    showProjectPercent,
+    timeline,
+    projects,
+    authors,
+    projectTrendSeries,
+    authorTrendSeries,
+    trendScope,
+    trendMetric,
+    subtractDeletions,
+    activeExcludedCommitIds,
+  ]);
+
+  const rawTrendRows = trendScope === 'byProject' ? projectTrendRows : authorTrendRows;
+  const activeTrendRows = showProjectPercent ? trendPercentRows : rawTrendRows;
   const activeTrendSeries = trendScope === 'byProject' ? projectTrendSeries : authorTrendSeries;
 
   const trendDomain = useMemo(() => {
+    if (showProjectPercent) {
+      if (activeTrendRows.length === 0) {
+        return [0, 100];
+      }
+
+      if (trendScope === 'byProject') {
+        return [0, 100];
+      }
+
+      const values = activeTrendRows.flatMap((row) =>
+        activeTrendSeries.map((line) => Math.max(0, Number(row[line.key]) || 0))
+      );
+      const max = Math.max(0, ...values);
+      return [0, max > 0 ? max : 100];
+    }
+
     if (activeTrendRows.length === 0) {
       return [0, 1];
     }
@@ -779,7 +985,12 @@ export default function App() {
       return [min - 1, max + 1];
     }
     return [min, max];
-  }, [activeTrendRows, activeTrendSeries]);
+  }, [showProjectPercent, trendScope, activeTrendRows, activeTrendSeries]);
+
+  const trendDisplayRows = useMemo(
+    () => buildNonOverlappingTrendRows(activeTrendRows, activeTrendSeries, trendDomain, showProjectPercent),
+    [activeTrendRows, activeTrendSeries, trendDomain, showProjectPercent]
+  );
 
   const selectedTrendPoint = useMemo(() => {
     if (activeTrendRows.length === 0) {
@@ -812,12 +1023,18 @@ export default function App() {
   const activeStackValueFormatter = isPercentMode
     ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
     : formatNumber;
-  const trendUnitLabel = trendMetric === 'commits'
-    ? '커밋 수'
-    : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)');
-  const trendDescription = trendScope === 'byProject'
-    ? `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`
-    : `시간에 따른 사용자별 누적 ${trendUnitLabel}입니다.`;
+  const trendUnitLabel = showProjectPercent
+    ? (trendScope === 'byProject' ? '기여도(%)' : '기여도 합산(%)')
+    : (trendMetric === 'commits'
+      ? '커밋 수'
+      : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)'));
+  const trendDescription = showProjectPercent
+    ? (trendScope === 'byProject'
+      ? '시간에 따른 레포별 기여도 비율(0~100%)입니다.'
+      : '시간에 따른 사용자별 기여도 합산 비율(레포별 비율 합)입니다.')
+    : (trendScope === 'byProject'
+      ? `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`
+      : `시간에 따른 사용자별 누적 ${trendUnitLabel}입니다.`);
 
   const ignoredRuleCount = identityRules.invalidLines.length;
   const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
@@ -973,7 +1190,7 @@ export default function App() {
             </Group>
             <div className="chart-wrap">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                <LineChart data={trendDisplayRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#d3d3d3" />
                   <XAxis
                     dataKey="timestampMs"
@@ -982,8 +1199,14 @@ export default function App() {
                     tickFormatter={(value) => formatKoreanDateTime(value)}
                     tickCount={6}
                   />
-                  <YAxis allowDecimals={false} domain={trendDomain} />
-                  {trendMetric === 'code' && subtractDeletions && (
+                  <YAxis
+                    allowDecimals={showProjectPercent}
+                    domain={trendDomain}
+                    tickFormatter={showProjectPercent
+                      ? (value) => `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                      : undefined}
+                  />
+                  {!showProjectPercent && trendMetric === 'code' && subtractDeletions && (
                     <ReferenceLine y={0} stroke="#8f8f8f" strokeDasharray="4 4" />
                   )}
                   {selectedTrendPoint && (
@@ -991,15 +1214,23 @@ export default function App() {
                   )}
                   <Tooltip
                     labelFormatter={(value) => formatKoreanDateTime(value)}
-                    formatter={(value, name) => [
-                      formatNumber(value),
-                      name,
-                    ]}
+                    formatter={(value, name, item) => {
+                      const rawKey = `${item?.dataKey}__raw`;
+                      const rawValue = item?.payload?.[rawKey];
+                      const displayValue = Number.isFinite(rawValue) ? rawValue : value;
+
+                      return [
+                        showProjectPercent
+                          ? `${Math.max(0, Number(displayValue) || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                          : formatNumber(displayValue),
+                        name,
+                      ];
+                    }}
                   />
                   {activeTrendSeries.map((series) => (
                     <Line
                       key={series.key}
-                      type="monotone"
+                      type="stepAfter"
                       name={series.label}
                       dataKey={series.key}
                       stroke={series.stroke}
