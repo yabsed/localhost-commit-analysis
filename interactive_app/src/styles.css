@@ -205,6 +205,12 @@ body {
   opacity: 0.55;
 }
 
+.timeline-focus-line {
+  stroke: rgba(10, 147, 150, 0.92);
+  stroke-width: 2.1;
+  stroke-dasharray: 8 6;
+}
+
 .timeline-node {
   cursor: pointer;
 }

@@ -135,12 +135,28 @@ function buildCumulativeRows(projects, authors, nodes, subtractDeletions = false
   };
 }
 
+function findNearestNodeIndex(nodes, targetY) {
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const distance = Math.abs((nodes[index]?.y ?? 0) - targetY);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+
+  return nearestIndex;
+}
+
 export default function App() {
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedId, setSelectedId] = useState(null);
   const [visibleNodeCount, setVisibleNodeCount] = useState(0);
+  const [focusLineY, setFocusLineY] = useState(0);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
   const timelineScrollRef = useRef(null);
 
@@ -183,26 +199,21 @@ export default function App() {
     return processLogData(payload);
   }, [payload]);
 
-  useEffect(() => {
-    if (!prepared?.timeline?.nodes?.length) {
-      return;
-    }
-
-    if (!selectedId) {
-      setSelectedId(prepared.timeline.nodes[prepared.timeline.nodes.length - 1].id);
-    }
-  }, [prepared, selectedId]);
-
   const selectedNode = useMemo(() => {
     if (!prepared?.timeline?.nodes?.length) {
       return null;
     }
 
+    const fallbackIndex = Math.max(
+      0,
+      Math.min(prepared.timeline.nodes.length - 1, visibleNodeCount - 1)
+    );
+
     return (
       prepared.timeline.nodes.find((node) => node.id === selectedId) ??
-      prepared.timeline.nodes[prepared.timeline.nodes.length - 1]
+      prepared.timeline.nodes[fallbackIndex]
     );
-  }, [prepared, selectedId]);
+  }, [prepared, selectedId, visibleNodeCount]);
   const commitRows = prepared?.commitRows ?? [];
   const lineRows = prepared?.lineRows ?? [];
   const projects = prepared?.projects ?? [];
@@ -213,12 +224,17 @@ export default function App() {
   useEffect(() => {
     if (!timeline?.nodes?.length) {
       setVisibleNodeCount(0);
+      setFocusLineY(0);
       return;
     }
 
     const scrollElement = timelineScrollRef.current;
     if (!scrollElement) {
-      setVisibleNodeCount(timeline.nodes.length);
+      const selectedIndex = timeline.nodes.length - 1;
+      const selectedNode = timeline.nodes[selectedIndex];
+      setVisibleNodeCount(selectedIndex + 1);
+      setFocusLineY(selectedNode?.y ?? 0);
+      setSelectedId((prev) => (prev === selectedNode?.id ? prev : selectedNode?.id ?? null));
       return;
     }
 
@@ -226,17 +242,18 @@ export default function App() {
     let ticking = false;
 
     const updateVisibleCount = () => {
-      const viewportBottom = scrollElement.scrollTop + scrollElement.clientHeight;
-      let nextCount = timeline.nodes.length;
-
-      for (let index = 0; index < timeline.nodes.length; index += 1) {
-        if (timeline.nodes[index].y > viewportBottom) {
-          nextCount = index;
-          break;
-        }
-      }
+      const viewportCenter = Math.round(
+        scrollElement.scrollTop + scrollElement.clientHeight / 2
+      );
+      const selectedIndex = findNearestNodeIndex(timeline.nodes, viewportCenter);
+      const selectedNode = timeline.nodes[selectedIndex];
+      const nextCount = selectedIndex + 1;
+      const nextSelectedId = selectedNode?.id ?? null;
+      const nextFocusLineY = selectedNode?.y ?? 0;
 
       setVisibleNodeCount((prev) => (prev === nextCount ? prev : nextCount));
+      setFocusLineY((prev) => (prev === nextFocusLineY ? prev : nextFocusLineY));
+      setSelectedId((prev) => (prev === nextSelectedId ? prev : nextSelectedId));
     };
 
     const scheduleUpdate = () => {
@@ -522,6 +539,18 @@ export default function App() {
                   style={{ stroke: edge.color }}
                 />
               ))}
+
+              {selectedNode && focusLineY > 0 && (
+                <g className="timeline-focus-guide" style={{ pointerEvents: 'none' }}>
+                  <line
+                    x1={24}
+                    y1={focusLineY}
+                    x2={timeline.width - 24}
+                    y2={focusLineY}
+                    className="timeline-focus-line"
+                  />
+                </g>
+              )}
 
               {timeline.nodes.map((node) => {
                 const isSelected = selectedNode?.id === node.id;
