@@ -43,6 +43,36 @@ const DEFAULT_IDENTITY_RULES_FILE = 'author_identity_rules.txt';
 const DEFAULT_TOP_LONG_COMMIT_PERCENT = 15;
 const DATA_SOURCE_QUERY_KEY = 'source';
 const PROJECT_LINE_FALLBACK_STROKES = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const STATIC_DATA_MANIFEST_PATH = 'data/manifest.json';
+const IS_STATIC_BUILD = import.meta.env.PROD;
+
+function resolveAppAssetUrl(relativePath) {
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const normalizedPath = String(relativePath || '').replace(/^\/+/, '');
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+async function fetchStaticDataManifest() {
+  const res = await fetch(resolveAppAssetUrl(STATIC_DATA_MANIFEST_PATH));
+  if (!res.ok) {
+    throw new Error(`정적 데이터 manifest 로드 실패: ${res.status}`);
+  }
+  return res.json();
+}
+
+function normalizeFileEntries(items, extension) {
+  const files = Array.isArray(items) ? items : [];
+  return files
+    .map((item) => ({
+      name: typeof item?.name === 'string' ? item.name : '',
+      sizeBytes: Number(item?.sizeBytes) || 0,
+      modifiedAtMs: Number(item?.modifiedAtMs) || 0,
+      path: typeof item?.path === 'string' ? item.path : null,
+    }))
+    .filter((item) => item.name && item.name.endsWith(extension))
+    .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs || a.name.localeCompare(b.name));
+}
 
 function readDataSourceFromUrl() {
   if (typeof window === 'undefined') {
@@ -746,19 +776,30 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/commit-logs');
-      if (!res.ok) {
-        throw new Error(`파일 목록 로드 실패: ${res.status}`);
+      let files = [];
+      if (IS_STATIC_BUILD) {
+        const manifest = await fetchStaticDataManifest();
+        files = normalizeFileEntries(manifest?.commitLogs, '.json');
+      } else {
+        const res = await fetch('/api/commit-logs');
+        if (!res.ok) {
+          throw new Error(`파일 목록 로드 실패: ${res.status}`);
+        }
+
+        const data = await res.json();
+        files = normalizeFileEntries(data?.files, '.json');
       }
 
-      const data = await res.json();
-      const files = Array.isArray(data?.files) ? data.files : [];
       setLogFiles(files);
 
       if (files.length === 0) {
         setSelectedLogFile(null);
         setPayload(null);
-        setError('선택 가능한 JSON 파일이 없습니다. commit_crawler/json을 확인하세요.');
+        setError(
+          IS_STATIC_BUILD
+            ? '선택 가능한 JSON 파일이 없습니다. build 전에 `npm run prepare:data`를 실행하세요.'
+            : '선택 가능한 JSON 파일이 없습니다. commit_crawler/json을 확인하세요.'
+        );
         return;
       }
 
@@ -792,12 +833,19 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/identity-rule-files');
-      if (!res.ok) {
-        throw new Error(`규칙 파일 목록 로드 실패: ${res.status}`);
+      let files = [];
+      if (IS_STATIC_BUILD) {
+        const manifest = await fetchStaticDataManifest();
+        files = normalizeFileEntries(manifest?.identityRuleFiles, '.txt');
+      } else {
+        const res = await fetch('/api/identity-rule-files');
+        if (!res.ok) {
+          throw new Error(`규칙 파일 목록 로드 실패: ${res.status}`);
+        }
+        const data = await res.json();
+        files = normalizeFileEntries(data?.files, '.txt');
       }
-      const data = await res.json();
-      const files = Array.isArray(data?.files) ? data.files : [];
+
       setIdentityRuleFiles(files);
       setSelectedIdentityRuleFile((current) => {
         if (preserveSelection && current && files.some((item) => item.name === current)) {
@@ -810,7 +858,11 @@ export default function App() {
         return files[0]?.name ?? null;
       });
       if (files.length === 0) {
-        setIdentityRuleFileError('interactive_app 디렉토리에 .txt 규칙 파일이 없습니다.');
+        setIdentityRuleFileError(
+          IS_STATIC_BUILD
+            ? '선택 가능한 .txt 규칙 파일이 없습니다. build 전에 `npm run prepare:data`를 실행하세요.'
+            : 'interactive_app 디렉토리에 .txt 규칙 파일이 없습니다.'
+        );
       } else {
         setIdentityRuleFileError('');
       }
@@ -832,7 +884,16 @@ export default function App() {
 
     try {
       setIdentityRuleFileLoading(true);
-      const res = await fetch(`/api/identity-rule-file?file=${encodeURIComponent(fileName)}`);
+      let res;
+      if (IS_STATIC_BUILD) {
+        const matchedFile = identityRuleFiles.find((item) => item.name === fileName);
+        if (!matchedFile?.path) {
+          throw new Error('규칙 파일 경로를 찾지 못했습니다. `npm run prepare:data`를 다시 실행하세요.');
+        }
+        res = await fetch(resolveAppAssetUrl(matchedFile.path));
+      } else {
+        res = await fetch(`/api/identity-rule-file?file=${encodeURIComponent(fileName)}`);
+      }
       if (!res.ok) {
         throw new Error(`규칙 파일 로드 실패: ${res.status}`);
       }
@@ -845,7 +906,7 @@ export default function App() {
     } finally {
       setIdentityRuleFileLoading(false);
     }
-  }, []);
+  }, [identityRuleFiles]);
 
   useEffect(() => {
     loadLogFiles();
@@ -879,7 +940,16 @@ export default function App() {
     async function load() {
       try {
         setLoading(true);
-        const res = await fetch(`/api/commit-log?file=${encodeURIComponent(selectedLogFile)}`);
+        let res;
+        if (IS_STATIC_BUILD) {
+          const matchedFile = logFiles.find((item) => item.name === selectedLogFile);
+          if (!matchedFile?.path) {
+            throw new Error('선택한 JSON 파일 경로를 찾지 못했습니다. `npm run prepare:data`를 다시 실행하세요.');
+          }
+          res = await fetch(resolveAppAssetUrl(matchedFile.path));
+        } else {
+          res = await fetch(`/api/commit-log?file=${encodeURIComponent(selectedLogFile)}`);
+        }
         if (!res.ok) {
           throw new Error(`데이터 로드 실패: ${res.status}`);
         }
@@ -903,7 +973,7 @@ export default function App() {
     return () => {
       mounted = false;
     };
-  }, [selectedLogFile]);
+  }, [logFiles, selectedLogFile]);
 
   const selectedLogFileMeta = useMemo(
     () => logFiles.find((item) => item.name === selectedLogFile) ?? null,

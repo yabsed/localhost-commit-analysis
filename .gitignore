@@ -37,3 +37,4 @@ pnpm-debug.log*
 # Generated data artifacts
 merged_git_logs.json
 interactive_app/public/merged_git_logs.json
+interactive_app/public/data/
