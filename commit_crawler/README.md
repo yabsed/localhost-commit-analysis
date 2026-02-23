@@ -30,6 +30,11 @@ not referenced by current `input.txt` to prevent unbounded file growth.
 - `https://github.com/owner/repo`
 - `owner/repo` (auto-converted to GitHub URL)
 - local path (supported for compatibility)
+- `https://github.com/owner/repo -> front` (optional source alias)
+- `owner/repo -> backend` (optional source alias)
+
+If `-> <alias>` is provided, merged JSON stores that value as `source_name`.
+If omitted, default `source_name` is the repository name.
 
 ## Pipeline options
 
@@ -45,9 +50,9 @@ not referenced by current `input.txt` to prevent unbounded file growth.
 ## Worker scripts
 
 - `commit_crawler/workers/crawl_git_logs.py`: crawler worker (`input.txt -> *.txt`)
-- `commit_crawler/workers/merge_git_logs_to_json.py`: merge worker (`*.txt -> merged_git_logs.json`)
+- `commit_crawler/workers/merge_git_logs_to_json.py`: merge worker (`*.txt -> merged_git_logs.json`, includes `source_name`)
 
-Merged JSON schema is the same as existing `merged_git_logs.json`.
+Merged JSON keeps existing core fields and adds metadata such as `source_name` and `filters`.
 
 ## Git tracking
 

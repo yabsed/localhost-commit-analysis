@@ -249,7 +249,10 @@ export function processLogData(payload, options = {}) {
   const preprocessedEntries = rawEntries.map((entry, index) => ({
     entry,
     index,
-    projectId: stripExt(basename(entry.source_file)),
+    projectId:
+      typeof entry.source_name === 'string' && entry.source_name.trim()
+        ? entry.source_name.trim()
+        : stripExt(basename(entry.source_file)),
     parsedAuthor: parseAuthor(entry.author),
     lineStats: computeLineStats(entry.raw_text),
     timestampMs: parseTimestampMs(entry),

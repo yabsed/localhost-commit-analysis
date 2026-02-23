@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         default="utf-8",
         help="Text encoding of input files (default: utf-8)",
     )
+    parser.add_argument(
+        "--source-name-map",
+        type=Path,
+        default=None,
+        help="Optional JSON map file: {\"/abs/path/to/log.txt\": \"source_name\"}.",
+    )
     return parser.parse_args()
 
 
@@ -119,12 +125,44 @@ def is_after_cutoff(timestamp_unix: float | None) -> bool:
     return timestamp_unix is not None and timestamp_unix > CUTOFF_TIMESTAMP_UNIX
 
 
-def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
+def load_source_name_map(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    if not path.exists():
+        raise SystemExit(f"Source name map not found: {path}")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise SystemExit(f"Invalid source name map format: {path} (expected JSON object)")
+
+    source_name_map: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        source_name = value.strip()
+        if not source_name:
+            continue
+        raw_path = Path(key)
+        source_name_map[str(raw_path)] = source_name
+        source_name_map[str(raw_path.resolve())] = source_name
+    return source_name_map
+
+
+def resolve_source_name(path: Path, source_name_map: dict[str, str]) -> str:
+    return source_name_map.get(str(path)) or source_name_map.get(str(path.resolve())) or path.stem
+
+
+def build_merged_json(
+    paths: list[Path],
+    encoding: str,
+    source_name_map: dict[str, str],
+) -> dict[str, Any]:
     entries: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []
     dropped_after_cutoff_total = 0
 
     for source_order, path in enumerate(paths):
+        source_name = resolve_source_name(path, source_name_map)
         text = path.read_text(encoding=encoding)
         prefix_text, blocks = split_log_text(text)
         dropped_after_cutoff = 0
@@ -132,6 +170,7 @@ def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
 
         source_entry: dict[str, Any] = {
             "source_file": str(path),
+            "source_name": source_name,
             "source_order": source_order,
             "encoding": encoding,
             "sha256": sha256_text(text, encoding),
@@ -150,6 +189,7 @@ def build_merged_json(paths: list[Path], encoding: str) -> dict[str, Any]:
             entries.append(
                 {
                     "source_file": str(path),
+                    "source_name": source_name,
                     "source_order": source_order,
                     "source_commit_index": source_commit_index,
                     "commit_hash": parsed["commit_hash"],
@@ -209,7 +249,8 @@ def main() -> None:
     if missing:
         raise SystemExit(f"Input file not found: {', '.join(missing)}")
 
-    merged = build_merged_json(paths, args.encoding)
+    source_name_map = load_source_name_map(args.source_name_map)
+    merged = build_merged_json(paths, args.encoding, source_name_map)
     output_path = args.output.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -219,7 +260,7 @@ def main() -> None:
     for source in merged["source_files"]:
         status = "OK" if source["lossless_check_passed"] else "FAILED"
         print(
-            f"- {source['source_file']}: commits={source['commit_count']}, "
+            f"- {source['source_name']} ({source['source_file']}): commits={source['commit_count']}, "
             f"included={source['included_commit_count']}, "
             f"filtered_after_cutoff={source['filtered_out_after_cutoff_count']}, "
             f"lossless_check={status}"

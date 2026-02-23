@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -30,6 +31,12 @@ CLONE_PHASE_RANGES: dict[str, tuple[float, float]] = {
     "resolving_deltas": (0.90, 1.00),
     "done": (1.00, 1.00),
 }
+
+
+@dataclass(frozen=True)
+class RepoTarget:
+    spec: str
+    alias: str | None = None
 
 
 class ProgressReporter:
@@ -122,16 +129,39 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_repo_specs(path: Path) -> list[str]:
+def parse_repo_target_line(line: str, line_number: int, path: Path) -> RepoTarget | None:
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return None
+
+    if "->" not in text:
+        return RepoTarget(spec=text, alias=None)
+
+    spec_part, alias_part = text.split("->", 1)
+    spec = spec_part.strip()
+    alias = alias_part.strip()
+
+    if not spec:
+        raise SystemExit(
+            f"Invalid repository entry at {path}:{line_number}: missing repository before '->'"
+        )
+    if not alias:
+        raise SystemExit(
+            f"Invalid repository entry at {path}:{line_number}: missing alias after '->'"
+        )
+
+    return RepoTarget(spec=spec, alias=alias)
+
+
+def load_repo_specs(path: Path) -> list[RepoTarget]:
     if not path.exists():
         raise SystemExit(f"Input file not found: {path}")
 
-    repo_specs: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        text = line.strip()
-        if not text or text.startswith("#"):
-            continue
-        repo_specs.append(text)
+    repo_specs: list[RepoTarget] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        target = parse_repo_target_line(line, line_number, path)
+        if target is not None:
+            repo_specs.append(target)
 
     if not repo_specs:
         raise SystemExit(f"No repository entries found in {path}")
@@ -139,11 +169,18 @@ def load_repo_specs(path: Path) -> list[str]:
     return repo_specs
 
 
+def repo_target_text(target: RepoTarget) -> str:
+    if target.alias:
+        return f"{target.spec} -> {target.alias}"
+    return target.spec
+
+
 def write_manifest(
     manifest_path: Path,
     input_path: Path,
     output_dir: Path,
     generated_files: list[Path],
+    source_name_by_file: dict[Path, str],
     planned_files: list[Path],
     pruned_files: list[Path],
     failures: list[str],
@@ -152,6 +189,10 @@ def write_manifest(
         "input_file": str(input_path),
         "output_dir": str(output_dir),
         "generated_files": [str(path) for path in generated_files],
+        "source_name_by_file": {
+            str(path): name
+            for path, name in sorted(source_name_by_file.items(), key=lambda item: str(item[0]))
+        },
         "planned_files": [str(path) for path in planned_files],
         "pruned_files": [str(path) for path in pruned_files],
         "failures": failures,
@@ -506,6 +547,7 @@ def main() -> None:
 
     failures: list[str] = []
     generated_files: list[Path] = []
+    source_name_by_file: dict[Path, str] = {}
     planned_output_paths: set[Path] = set()
     pruned_files: list[Path] = []
     seen_output_paths: set[Path] = set()
@@ -515,18 +557,25 @@ def main() -> None:
     print(f"Output dir: {output_dir}")
     print(f"Repositories: {len(repo_specs)}")
 
-    for repo_index, repo_spec in enumerate(repo_specs, start=1):
+    for repo_index, target in enumerate(repo_specs, start=1):
+        repo_spec = target.spec
+        target_text = repo_target_text(target)
+
         if is_remote_repo_spec(repo_spec):
             remote_url = normalize_remote_spec(repo_spec)
-            repo_label = remote_repo_name(repo_spec)
+            default_source_name = remote_repo_name(repo_spec)
+            source_name = target.alias or default_source_name
+            repo_label = source_name
             output_path = build_remote_output_path(repo_spec, output_dir)
-            planned_output_paths.add(output_path.resolve())
+            output_path_resolved = output_path.resolve()
+            planned_output_paths.add(output_path_resolved)
+            source_name_by_file[output_path_resolved] = source_name
 
             if should_reuse_output(output_path, args.force):
                 if output_path not in seen_output_paths:
                     generated_files.append(output_path)
                     seen_output_paths.add(output_path)
-                print(f"[SKIP] {repo_spec} -> {output_path} (already exists)")
+                print(f"[SKIP] {target_text} -> {output_path} (already exists)")
                 continue
 
             try:
@@ -550,38 +599,42 @@ def main() -> None:
                         repo_label,
                     )
             except RuntimeError as error:
-                failures.append(f"{repo_spec}: {error}")
+                failures.append(f"{target_text}: {error}")
                 progress.finish()
-                print(f"[FAIL] {repo_spec} -> {error}", file=sys.stderr)
+                print(f"[FAIL] {target_text} -> {error}", file=sys.stderr)
                 continue
 
             if output_path not in seen_output_paths:
                 generated_files.append(output_path)
                 seen_output_paths.add(output_path)
-            print(f"[OK] {repo_spec} -> {output_path}")
+            print(f"[OK] {target_text} -> {output_path}")
             continue
 
         repo_path = resolve_repo_path(repo_spec, input_path)
         if repo_path is None:
             failures.append(
-                f"{repo_spec}: repository not found (local) and not a valid remote spec"
+                f"{target_text}: repository not found (local) and not a valid remote spec"
             )
             progress.finish()
             print(
-                f"[FAIL] {repo_spec} -> repository not found",
+                f"[FAIL] {target_text} -> repository not found",
                 file=sys.stderr,
             )
             continue
 
-        repo_label = repo_path.name or repo_spec
+        default_source_name = repo_path.name or repo_spec
+        source_name = target.alias or default_source_name
+        repo_label = source_name
         output_path = build_local_output_path(repo_path, output_dir)
-        planned_output_paths.add(output_path.resolve())
+        output_path_resolved = output_path.resolve()
+        planned_output_paths.add(output_path_resolved)
+        source_name_by_file[output_path_resolved] = source_name
 
         if should_reuse_output(output_path, args.force):
             if output_path not in seen_output_paths:
                 generated_files.append(output_path)
                 seen_output_paths.add(output_path)
-            print(f"[SKIP] {repo_spec} -> {output_path} (already exists)")
+            print(f"[SKIP] {target_text} -> {output_path} (already exists)")
             continue
 
         try:
@@ -596,15 +649,15 @@ def main() -> None:
                 repo_label,
             )
         except RuntimeError as error:
-            failures.append(f"{repo_spec}: {error}")
+            failures.append(f"{target_text}: {error}")
             progress.finish()
-            print(f"[FAIL] {repo_spec} -> {error}", file=sys.stderr)
+            print(f"[FAIL] {target_text} -> {error}", file=sys.stderr)
             continue
 
         if output_path not in seen_output_paths:
             generated_files.append(output_path)
             seen_output_paths.add(output_path)
-        print(f"[OK] {repo_spec} -> {output_path}")
+        print(f"[OK] {target_text} -> {output_path}")
 
     if not args.no_prune:
         pruned_files = prune_stale_txt_files(output_dir, planned_output_paths)
@@ -617,6 +670,7 @@ def main() -> None:
             input_path,
             output_dir,
             generated_files,
+            source_name_by_file,
             sorted(planned_output_paths, key=lambda path: str(path)),
             pruned_files,
             failures,

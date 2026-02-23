@@ -136,6 +136,15 @@ def main() -> None:
         if not generated_files:
             raise SystemExit("No git-log text files were generated.")
 
+        source_name_by_file = manifest.get("source_name_by_file", {})
+        source_name_map_path: Path | None = None
+        if isinstance(source_name_by_file, dict) and source_name_by_file:
+            source_name_map_path = Path(temp_dir) / "source_name_map.json"
+            source_name_map_path.write_text(
+                json.dumps(source_name_by_file, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
         merge_cmd = [
             sys.executable,
             str(merge_script),
@@ -145,6 +154,8 @@ def main() -> None:
             "--encoding",
             args.encoding,
         ]
+        if source_name_map_path is not None:
+            merge_cmd.extend(["--source-name-map", str(source_name_map_path)])
         run_step(merge_cmd, "Merge logs to JSON")
 
     print("\nPipeline completed.")

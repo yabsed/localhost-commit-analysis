@@ -5,14 +5,14 @@
 # - https://github.com/owner/repo.git
 # - https://github.com/owner/repo
 # - owner/repo
+# - https://github.com/owner/repo -> front
 # (saved as commit_crawler/repo/owner/repo.txt)
 #
 # Local paths are also supported for compatibility.
 #
 # Example:
 # https://github.com/jangjinuite/aicupid-frontend.git
-# jangjinuite/aicupid-backend
+# jangjinuite/aicupid-backend -> backend
 
-https://github.com/moim-ing/wackathon-frontend
-https://github.com/moim-ing/wackathon-backend
-https://github.com/moim-ing/wackathon-data
+https://github.com/s3mng/meet_you
+https://github.com/swfs0417/gimmary
