@@ -105,6 +105,10 @@ body {
   flex-direction: column;
 }
 
+.battle-control-group {
+  align-items: center;
+}
+
 .battle-metrics {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }

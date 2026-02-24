@@ -329,6 +329,8 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
       teamTotalSeries: [],
       authorSeries: [],
       authorKeyById: new Map(),
+      repoSeries: [],
+      repoKeyById: new Map(),
     };
   }
 
@@ -336,6 +338,7 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
   const teamById = new Map();
   const nodes = [];
   const authorStatsById = new Map();
+  const repoStatsById = new Map();
 
   for (const teamPayload of teamPayloads) {
     const teamId = teamIdFromFileName(teamPayload.fileName);
@@ -388,6 +391,19 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
         transformed.teamId,
         (authorStats.teamCounts.get(transformed.teamId) ?? 0) + 1
       );
+
+      if (!repoStatsById.has(transformed.repoId)) {
+        repoStatsById.set(transformed.repoId, {
+          id: transformed.repoId,
+          teamId: transformed.teamId,
+          repoName: transformed.repoName || 'unknown-repo',
+          commits: 0,
+          lines: 0,
+        });
+      }
+      const repoStats = repoStatsById.get(transformed.repoId);
+      repoStats.commits += 1;
+      repoStats.lines += transformed.touchedLines;
     }
   }
 
@@ -461,12 +477,42 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
 
   const authorKeyById = new Map(authorSeries.map((author) => [author.id, author.key]));
 
+  const sortedRepos = [...repoStatsById.values()]
+    .sort((a, b) => (
+      b.commits - a.commits
+      || b.lines - a.lines
+      || a.repoName.localeCompare(b.repoName)
+      || a.id.localeCompare(b.id)
+    ));
+
+  const repoColorOrderByTeam = new Map();
+  const repoSeries = sortedRepos.map((repo, index) => {
+    const orderInTeam = repoColorOrderByTeam.get(repo.teamId) ?? 0;
+    repoColorOrderByTeam.set(repo.teamId, orderInTeam + 1);
+    const teamColor = teamColorById.get(repo.teamId) ?? '#64748b';
+
+    return {
+      id: repo.id,
+      key: `repo_${index}`,
+      teamId: repo.teamId,
+      label: repo.repoName || 'unknown-repo',
+      stroke: pickUserStrokeByTeam(teamColor, orderInTeam),
+      strokeWidth: 1.1,
+      opacity: 0.95,
+      isTeamTotal: false,
+    };
+  });
+
+  const repoKeyById = new Map(repoSeries.map((repo) => [repo.id, repo.key]));
+
   return {
     nodes,
     teams,
     teamTotalSeries,
     authorSeries,
     authorKeyById,
+    repoSeries,
+    repoKeyById,
   };
 }
 
@@ -500,6 +546,7 @@ function buildTeamRows(
       index,
       timestampMs: Number(node.timestampMs) || 0,
       label: formatKoreanDateTime(node.timestampMs),
+      shortLabel: formatBattleMomentShort(node.timestampMs),
     };
 
     if (!showPercent) {
@@ -555,6 +602,7 @@ function buildAuthorRows(
       index,
       timestampMs: Number(node.timestampMs) || 0,
       label: formatKoreanDateTime(node.timestampMs),
+      shortLabel: formatBattleMomentShort(node.timestampMs),
     };
 
     if (!showPercent) {
@@ -626,6 +674,62 @@ function buildRepoBattleRows(
     for (const series of REPO_BATTLE_SERIES) {
       row[series.key] = Number(totalsByGroupId[series.id]) || 0;
     }
+    return row;
+  });
+}
+
+function buildRepoRows(
+  nodes,
+  repoSeries,
+  repoKeyById,
+  metric,
+  subtractDeletions = false,
+  showPercent = false,
+  excludedCommitIds = null,
+  initialTotalsByRepoKey = null
+) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return [];
+  }
+
+  const totalsByRepoKey = Object.fromEntries(repoSeries.map((series) => [
+    series.key,
+    Number(initialTotalsByRepoKey?.[series.key]) || 0,
+  ]));
+
+  return nodes.map((node, index) => {
+    if (!excludedCommitIds?.has(node.id)) {
+      const delta = trendDelta(node, metric, subtractDeletions);
+      const repoKey = repoKeyById.get(node.repoId);
+      if (repoKey && Object.prototype.hasOwnProperty.call(totalsByRepoKey, repoKey)) {
+        totalsByRepoKey[repoKey] += delta;
+      }
+    }
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+      shortLabel: formatBattleMomentShort(node.timestampMs),
+    };
+
+    if (!showPercent) {
+      for (const series of repoSeries) {
+        row[series.key] = Number(totalsByRepoKey[series.key]) || 0;
+      }
+      return row;
+    }
+
+    const denominator = repoSeries.reduce(
+      (sum, series) => sum + Math.abs(Number(totalsByRepoKey[series.key]) || 0),
+      0
+    );
+
+    for (const series of repoSeries) {
+      const value = Number(totalsByRepoKey[series.key]) || 0;
+      row[series.key] = denominator > 0 ? (value / denominator) * 100 : 0;
+    }
+
     return row;
   });
 }
@@ -727,7 +831,7 @@ function TeamStackedTooltip({
   active,
   payload,
   label,
-  authorByKey,
+  seriesByKey,
   unitLabel,
   valueFormatter = formatNumber,
 }) {
@@ -751,7 +855,7 @@ function TeamStackedTooltip({
       <Text fw={700} mb={6}>{label}</Text>
       <Stack gap={4}>
         {normalized.map((item) => {
-          const author = authorByKey[item.dataKey];
+          const series = seriesByKey[item.dataKey];
           return (
             <Group key={`${item.dataKey}-${label}`} justify="space-between" gap="xl">
               <Group gap={8}>
@@ -760,7 +864,7 @@ function TeamStackedTooltip({
                   style={{ backgroundColor: item.color }}
                   aria-hidden="true"
                 />
-                <Text size="sm">{author?.label ?? item.dataKey}</Text>
+                <Text size="sm">{series?.label ?? item.dataKey}</Text>
               </Group>
               <Text size="sm" fw={700}>{valueFormatter(item.value)} {unitLabel}</Text>
             </Group>
@@ -832,6 +936,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   );
   const [logFiles, setLogFiles] = useState([]);
 
+  const [entityMode, setEntityMode] = useState('user');
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
   const [includePreTimelinePrep, setIncludePreTimelinePrep] = useState(false);
@@ -1006,6 +1111,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   const teamTotalSeries = prepared.teamTotalSeries;
   const authorSeries = prepared.authorSeries;
   const authorKeyById = prepared.authorKeyById;
+  const repoSeries = prepared.repoSeries;
+  const repoKeyById = prepared.repoKeyById;
   const teams = prepared.teams;
 
   const topLongCommitPercent = useMemo(() => {
@@ -1117,6 +1224,34 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     useNetLines,
   ]);
 
+  const preTimelineRepoTotals = useMemo(() => {
+    if (!includePreTimelinePrep) {
+      return null;
+    }
+
+    const totalsByRepoKey = Object.fromEntries(repoSeries.map((series) => [series.key, 0]));
+    for (const node of preTimelineNodes) {
+      if (activeExcludedCommitIds?.has(node.id)) {
+        continue;
+      }
+      const repoKey = repoKeyById.get(node.repoId);
+      if (!repoKey || !Object.prototype.hasOwnProperty.call(totalsByRepoKey, repoKey)) {
+        continue;
+      }
+      const delta = trendDelta(node, metricForTrend, useNetLines);
+      totalsByRepoKey[repoKey] += delta;
+    }
+    return totalsByRepoKey;
+  }, [
+    includePreTimelinePrep,
+    repoSeries,
+    repoKeyById,
+    preTimelineNodes,
+    activeExcludedCommitIds,
+    metricForTrend,
+    useNetLines,
+  ]);
+
   const teamRows = useMemo(
     () => buildTeamRows(
       timelineWindowNodes,
@@ -1161,26 +1296,51 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     ]
   );
 
+  const repoRows = useMemo(
+    () => buildRepoRows(
+      timelineWindowNodes,
+      repoSeries,
+      repoKeyById,
+      metricForTrend,
+      useNetLines,
+      showProjectPercent,
+      activeExcludedCommitIds,
+      preTimelineRepoTotals
+    ),
+    [
+      timelineWindowNodes,
+      repoSeries,
+      repoKeyById,
+      metricForTrend,
+      useNetLines,
+      showProjectPercent,
+      activeExcludedCommitIds,
+      preTimelineRepoTotals,
+    ]
+  );
+
+  const activeContributorRows = entityMode === 'repo' ? repoRows : authorRows;
+
   const activeTrendRows = useMemo(() => {
-    if (!teamRows.length && !authorRows.length) {
+    if (!teamRows.length && !activeContributorRows.length) {
       return [];
     }
     if (!teamRows.length) {
-      return authorRows;
+      return activeContributorRows;
     }
-    if (!authorRows.length) {
+    if (!activeContributorRows.length) {
       return teamRows;
     }
-    const rowCount = Math.min(teamRows.length, authorRows.length);
+    const rowCount = Math.min(teamRows.length, activeContributorRows.length);
     const rows = [];
     for (let index = 0; index < rowCount; index += 1) {
       rows.push({
         ...teamRows[index],
-        ...authorRows[index],
+        ...activeContributorRows[index],
       });
     }
     return rows;
-  }, [teamRows, authorRows]);
+  }, [teamRows, activeContributorRows]);
 
   useEffect(() => {
     if (!activeTrendRows.length) {
@@ -1212,6 +1372,14 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const handleDialWheel = useCallback((event) => {
     if (activeTrendRows.length <= 1) {
+      return;
+    }
+    const targetElement = event?.target;
+    if (
+      typeof Element !== 'undefined'
+      && targetElement instanceof Element
+      && targetElement.closest('.battle-ranking-panel')
+    ) {
       return;
     }
     const tagName = String(event?.target?.tagName || '').toLowerCase();
@@ -1252,17 +1420,27 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [teamTotalSeries, activeTeamIds]
   );
 
-  const authorByKey = useMemo(
-    () => Object.fromEntries(authorSeries.map((author) => [author.key, author])),
-    [authorSeries]
+  const activeEntitySeries = useMemo(
+    () => (entityMode === 'repo' ? repoSeries : authorSeries),
+    [entityMode, repoSeries, authorSeries]
   );
 
-  const userRankingRows = useMemo(() => {
+  const activeTeamEntitySeries = useMemo(
+    () => activeEntitySeries.filter((entity) => activeTeamIds.has(entity.teamId)),
+    [activeEntitySeries, activeTeamIds]
+  );
+
+  const entityByKey = useMemo(
+    () => Object.fromEntries(activeTeamEntitySeries.map((entity) => [entity.key, entity])),
+    [activeTeamEntitySeries]
+  );
+
+  const rankingRows = useMemo(() => {
     const row = activeMoment?.row;
     if (!row) {
       return [];
     }
-    return authorSeries
+    return activeTeamEntitySeries
       .map((series) => {
         const signedValue = Number(row[series.key]) || 0;
         const team = teamById.get(series.teamId);
@@ -1273,9 +1451,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
           magnitude: Math.abs(signedValue),
         };
       })
-      .filter((item) => item.magnitude > 0 && activeTeamIds.has(item.teamId))
+      .filter((item) => item.magnitude > 0)
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, authorSeries, teamById, activeTeamIds]);
+  }, [activeMoment, activeTeamEntitySeries, teamById]);
 
   const teamStackRows = useMemo(() => {
     const row = activeMoment?.row;
@@ -1290,24 +1468,19 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         total: 0,
       };
 
-      for (const author of authorSeries) {
-        const value = author.teamId === teamSeries.teamId
-          ? (Number(row[author.key]) || 0)
+      for (const entity of activeTeamEntitySeries) {
+        const value = entity.teamId === teamSeries.teamId
+          ? (Number(row[entity.key]) || 0)
           : 0;
-        stackRow[author.key] = value;
+        stackRow[entity.key] = value;
         stackRow.total += value;
       }
 
       return stackRow;
     });
-  }, [activeMoment, activeTeamTotalSeries, authorSeries, teamById]);
+  }, [activeMoment, activeTeamTotalSeries, activeTeamEntitySeries, teamById]);
 
-  const activeTeamAuthors = useMemo(
-    () => authorSeries.filter((author) => activeTeamIds.has(author.teamId)),
-    [authorSeries, activeTeamIds]
-  );
-
-  const teamStackSeries = activeTeamAuthors;
+  const teamStackSeries = activeTeamEntitySeries;
 
   const teamStackDomain = useMemo(
     () => buildStackValueBounds(teamStackRows, teamStackSeries),
@@ -1375,7 +1548,45 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [repoBattleRows]
   );
 
-  const repoBattleValueFormatter = formatNumber;
+  const userLineSeries = useMemo(() => {
+    if (!authorRows.length) {
+      return [];
+    }
+    const lastRow = authorRows[authorRows.length - 1];
+    return authorSeries
+      .map((series) => ({
+        ...series,
+        magnitude: Math.abs(Number(lastRow?.[series.key]) || 0),
+      }))
+      .filter((series) => series.magnitude > 0 && activeTeamIds.has(series.teamId))
+      .sort((a, b) => b.magnitude - a.magnitude)
+      .slice(0, 8);
+  }, [authorRows, authorSeries, activeTeamIds]);
+
+  const userLineSeriesByKey = useMemo(
+    () => Object.fromEntries(userLineSeries.map((series) => [series.key, series])),
+    [userLineSeries]
+  );
+
+  const userLineDomain = useMemo(
+    () => buildSeriesValueBounds(authorRows, userLineSeries),
+    [authorRows, userLineSeries]
+  );
+
+  const lineChartRows = entityMode === 'repo' ? repoBattleRows : authorRows;
+  const lineChartSeries = entityMode === 'repo' ? REPO_BATTLE_SERIES : userLineSeries;
+  const lineChartSeriesByKey = entityMode === 'repo' ? repoBattleSeriesByKey : userLineSeriesByKey;
+  const lineChartDomain = entityMode === 'repo' ? repoBattleDomain : userLineDomain;
+  const lineChartValueFormatter = formatNumber;
+  const lineChartTitle = entityMode === 'repo' ? '레포 3진영 꺾은선' : '사용자 누적 꺾은선';
+  const lineChartHint = entityMode === 'repo'
+    ? '백엔드 vs 프런트 vs 기타'
+    : `상위 ${Math.min(8, userLineSeries.length)}명 누적 추이`;
+  const lineChartEmptyText = entityMode === 'repo'
+    ? '해당 시점의 레포 데이터가 없습니다.'
+    : '해당 시점의 사용자 데이터가 없습니다.';
+  const hasLineChartData = lineChartRows.length > 0 && lineChartSeries.length > 0;
+  const hasNegativeLineValue = lineChartDomain[0] < 0;
 
   const dialWindowText = useMemo(
     () => `${formatKoreanDateTime(BATTLE_TIMELINE_START_MS)} ~ ${formatKoreanDateTime(BATTLE_TIMELINE_END_MS)}`,
@@ -1429,11 +1640,12 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     );
   }, []);
 
-  const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} 팀+사용자 통합 추이`;
+  const trendTargetLabel = entityMode === 'repo' ? '레포' : '사용자';
+  const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} ${trendTargetLabel} 기준 배틀 추이`;
 
   const trendDescription = showProjectPercent
-    ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 레포 3진영 꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
+    ? `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 팀 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
+    : `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 팀 막대/꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1463,25 +1675,47 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
               <Title order={4}>{trendTitle}</Title>
               <Text size="sm" c="dimmed">{trendDescription}</Text>
             </Stack>
-            <Group gap="xs">
-              <Button
-                size="xs"
-                color={actionButtonColor}
-                radius={0}
-                variant={metricMode === 'commits' ? 'filled' : 'default'}
-                onClick={() => setMetricMode('commits')}
-              >
-                커밋 수
-              </Button>
-              <Button
-                size="xs"
-                color={actionButtonColor}
-                radius={0}
-                variant={metricMode === 'lines' ? 'filled' : 'default'}
-                onClick={() => setMetricMode('lines')}
-              >
-                라인 수
-              </Button>
+            <Group gap="xs" className="battle-control-group">
+              <Group gap={6} wrap="nowrap">
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={entityMode === 'user' ? 'filled' : 'default'}
+                  onClick={() => setEntityMode('user')}
+                >
+                  사용자
+                </Button>
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={entityMode === 'repo' ? 'filled' : 'default'}
+                  onClick={() => setEntityMode('repo')}
+                >
+                  레포
+                </Button>
+              </Group>
+              <Group gap={6} wrap="nowrap">
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={metricMode === 'commits' ? 'filled' : 'default'}
+                  onClick={() => setMetricMode('commits')}
+                >
+                  커밋 수
+                </Button>
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={metricMode === 'lines' ? 'filled' : 'default'}
+                  onClick={() => setMetricMode('lines')}
+                >
+                  라인 수
+                </Button>
+              </Group>
             </Group>
           </Group>
 
@@ -1578,25 +1812,27 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
           <div className="battle-chart-layout">
             <Paper withBorder radius="md" p="sm" className="battle-ranking-panel">
               <Group justify="space-between" align="center" mb={8}>
-                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>사용자 랭킹</Text>
-                <Badge color="gray" variant="light">{userRankingRows.length}명</Badge>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
+                  {entityMode === 'repo' ? '레포 랭킹' : '사용자 랭킹'}
+                </Text>
+                <Badge color="gray" variant="light">{rankingRows.length}{entityMode === 'repo' ? '개' : '명'}</Badge>
               </Group>
               <div className="battle-ranking-list">
-                {userRankingRows.map((user, index) => (
-                  <div key={`ranking-${user.key}`} className="battle-ranking-item">
+                {rankingRows.map((item, index) => (
+                  <div key={`ranking-${item.key}`} className="battle-ranking-item">
                     <Text size="xs" fw={700} c="dimmed" className="battle-ranking-order">
                       {index + 1}
                     </Text>
                     <div className="battle-ranking-main">
-                      <Text size="sm" fw={700} className="battle-ranking-name" style={{ color: user.stroke }}>
-                        {user.label}
+                      <Text size="sm" fw={700} className="battle-ranking-name" style={{ color: item.stroke }}>
+                        {item.label}
                       </Text>
-                      <Text size="xs" c="dimmed">{user.teamLabel}</Text>
+                      <Text size="xs" c="dimmed">{item.teamLabel}</Text>
                     </div>
                     <Text size="sm" fw={700}>
                       {showProjectPercent
-                        ? `${Number(user.signedValue).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-                        : formatNumber(user.signedValue)}
+                        ? `${Number(item.signedValue).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                        : formatNumber(item.signedValue)}
                     </Text>
                   </div>
                 ))}
@@ -1615,7 +1851,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
               ) : (
                 <div className="battle-team-visual-layout">
                   <div className="battle-team-chart-block">
-                    <Text size="xs" c="dimmed" fw={700} mb={4}>스택 막대</Text>
+                    <Text size="xs" c="dimmed" fw={700} mb={4}>
+                      스택 막대 ({entityMode === 'repo' ? '레포' : '사용자'} 기준)
+                    </Text>
                     <div className="battle-team-bar-wrap">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart
@@ -1652,27 +1890,27 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                           <Tooltip
                             content={
                               <TeamStackedTooltip
-                                authorByKey={authorByKey}
+                                seriesByKey={entityByKey}
                                 unitLabel={teamStackUnitLabel}
                                 valueFormatter={teamStackValueFormatter}
                               />
                             }
                           />
-                          {teamStackSeries.map((author) => (
+                          {teamStackSeries.map((series) => (
                             <Bar
-                              key={`team-stack-${author.key}`}
-                              dataKey={author.key}
+                              key={`team-stack-${series.key}`}
+                              dataKey={series.key}
                               stackId={metricMode}
-                              fill={author.stroke}
+                              fill={series.stroke}
                               isAnimationActive={false}
                             >
                               <LabelList
-                                dataKey={author.key}
-                                content={(props) => renderTeamSegmentLabel(props, author.label)}
+                                dataKey={series.key}
+                                content={(props) => renderTeamSegmentLabel(props, series.label)}
                               />
                               {teamStackRows.map((row, index) => (
                                 <Cell
-                                  key={`${author.key}-${row?.teamId ?? index}`}
+                                  key={`${series.key}-${row?.teamId ?? index}`}
                                   radius={[4, 4, 4, 4]}
                                 />
                               ))}
@@ -1685,23 +1923,23 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
                   <div className="battle-team-chart-block">
                     <Group justify="space-between" align="center" mb={4}>
-                      <Text size="xs" c="dimmed" fw={700}>레포 3진영 꺾은선</Text>
-                      <Text size="xs" c="dimmed">백엔드 vs 프런트 vs 기타</Text>
+                      <Text size="xs" c="dimmed" fw={700}>{lineChartTitle}</Text>
+                      <Text size="xs" c="dimmed">{lineChartHint}</Text>
                     </Group>
-                    {repoBattleRows.length === 0 ? (
-                      <Text size="sm" c="dimmed">해당 시점의 레포 데이터가 없습니다.</Text>
+                    {!hasLineChartData ? (
+                      <Text size="sm" c="dimmed">{lineChartEmptyText}</Text>
                     ) : (
                       <div className="battle-team-line-wrap">
                         <ResponsiveContainer width="100%" height="100%">
                           <LineChart
-                            data={repoBattleRows}
+                            data={lineChartRows}
                             margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                             <XAxis
                               dataKey="index"
                               interval="preserveStartEnd"
-                              tickFormatter={(value) => repoBattleRows[value]?.shortLabel ?? ''}
+                              tickFormatter={(value) => lineChartRows[value]?.shortLabel ?? ''}
                               minTickGap={18}
                               tick={{ fill: chartTickColor, fontSize: 11 }}
                               axisLine={{ stroke: chartAxisStroke }}
@@ -1709,7 +1947,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                             />
                             <YAxis
                               allowDecimals={false}
-                              domain={repoBattleDomain}
+                              domain={lineChartDomain}
                               tick={{ fill: chartTickColor, fontSize: 11 }}
                               axisLine={{ stroke: chartAxisStroke }}
                               tickLine={{ stroke: chartAxisStroke }}
@@ -1717,21 +1955,21 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                             {Number.isFinite(activeLineMarkerIndex) && (
                               <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
                             )}
-                            {(useNetLines || repoBattleDomain[0] < 0) && (
+                            {(useNetLines || hasNegativeLineValue) && (
                               <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                             )}
                             <Tooltip
                               content={
                                 <TeamLineTooltip
-                                  seriesByKey={repoBattleSeriesByKey}
-                                  valueFormatter={repoBattleValueFormatter}
+                                  seriesByKey={lineChartSeriesByKey}
+                                  valueFormatter={lineChartValueFormatter}
                                   showPercent={false}
                                 />
                               }
                             />
-                            {REPO_BATTLE_SERIES.map((series) => (
+                            {lineChartSeries.map((series) => (
                               <Line
-                                key={`repo-battle-line-${series.id}`}
+                                key={`battle-line-${series.key}`}
                                 type="monotone"
                                 dataKey={series.key}
                                 stroke={series.stroke}
