@@ -694,7 +694,7 @@ function TeamLineTooltip({
   active,
   payload,
   label,
-  teamSeriesByKey,
+  seriesByKey,
   valueFormatter = formatNumber,
   showPercent = false,
 }) {
@@ -709,13 +709,14 @@ function TeamLineTooltip({
   if (!normalized.length) {
     return null;
   }
+  const tooltipLabel = normalized[0]?.payload?.shortLabel ?? normalized[0]?.payload?.label ?? label;
 
   return (
     <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
-      <Text fw={700} mb={6}>{label}</Text>
+      <Text fw={700} mb={6}>{tooltipLabel}</Text>
       <Stack gap={4}>
         {normalized.map((item) => {
-          const team = teamSeriesByKey[item.dataKey];
+          const series = seriesByKey[item.dataKey];
           const value = Number(item.value) || 0;
           const valueText = showPercent
             ? `${Number(value).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
@@ -728,7 +729,7 @@ function TeamLineTooltip({
                   style={{ backgroundColor: item.color }}
                   aria-hidden="true"
                 />
-                <Text size="sm">{team?.teamLabel ?? item.name ?? item.dataKey}</Text>
+                <Text size="sm">{series?.label ?? item.name ?? item.dataKey}</Text>
               </Group>
               <Text size="sm" fw={700}>{valueText}</Text>
             </Group>
@@ -759,6 +760,16 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     String(DEFAULT_TOP_LONG_COMMIT_PERCENT)
   );
   const [activeTrendIndex, setActiveTrendIndex] = useState(null);
+
+  const linkedMetricOptionChecked = metricMode === 'commits'
+    ? excludeZeroLengthCommit
+    : subtractDeletions;
+
+  const setLinkedMetricOptionChecked = useCallback((nextChecked) => {
+    const checked = Boolean(nextChecked);
+    setExcludeZeroLengthCommit(checked);
+    setSubtractDeletions(checked);
+  }, []);
 
   const identityRules = useMemo(
     () => parseIdentityRules(identityRulesText),
@@ -1165,16 +1176,28 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
     : formatNumber;
 
-  const teamSeriesByKey = useMemo(
-    () => Object.fromEntries(activeTeamTotalSeries.map((series) => [series.key, {
-      ...series,
-      teamLabel: teamById.get(series.teamId)?.label ?? series.label,
-    }])),
-    [activeTeamTotalSeries, teamById]
+  const topRankedAuthors = useMemo(
+    () => userRankingRows.slice(0, 5),
+    [userRankingRows]
   );
 
-  const teamLineRows = useMemo(() => {
-    if (!activeTrendRows.length || !activeTeamTotalSeries.length) {
+  const topAuthorSeries = useMemo(
+    () => topRankedAuthors.map((author) => ({
+      key: author.key,
+      id: author.id,
+      label: author.label,
+      stroke: author.stroke,
+    })),
+    [topRankedAuthors]
+  );
+
+  const topAuthorSeriesByKey = useMemo(
+    () => Object.fromEntries(topAuthorSeries.map((series) => [series.key, series])),
+    [topAuthorSeries]
+  );
+
+  const topAuthorLineRows = useMemo(() => {
+    if (!activeTrendRows.length || !topAuthorSeries.length) {
       return [];
     }
     return activeTrendRows.map((row, index) => {
@@ -1184,16 +1207,16 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         label: formatKoreanDateTime(row.timestampMs),
         shortLabel: formatBattleMomentShort(row.timestampMs),
       };
-      for (const series of activeTeamTotalSeries) {
+      for (const series of topAuthorSeries) {
         lineRow[series.key] = Number(row[series.key]) || 0;
       }
       return lineRow;
     });
-  }, [activeTrendRows, activeTeamTotalSeries]);
+  }, [activeTrendRows, topAuthorSeries]);
 
-  const teamLineDomain = useMemo(
-    () => buildSeriesValueBounds(teamLineRows, activeTeamTotalSeries),
-    [teamLineRows, activeTeamTotalSeries]
+  const topAuthorLineDomain = useMemo(
+    () => buildSeriesValueBounds(topAuthorLineRows, topAuthorSeries),
+    [topAuthorLineRows, topAuthorSeries]
   );
 
   const dialWindowText = useMemo(
@@ -1201,8 +1224,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     []
   );
 
-  const activeLineMarkerLabel = useMemo(
-    () => (activeMoment?.row ? formatBattleMomentShort(activeMoment.row.timestampMs) : null),
+  const activeLineMarkerIndex = useMemo(
+    () => (activeMoment ? Number(activeMoment.index) : null),
     [activeMoment]
   );
 
@@ -1252,7 +1275,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const trendDescription = showProjectPercent
     ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대/꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText})`;
+    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + TOP5 사용자 꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1341,18 +1364,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                 size="sm"
                 color={actionButtonColor}
                 radius={0}
-                checked={excludeZeroLengthCommit}
-                onChange={(event) => setExcludeZeroLengthCommit(event.currentTarget.checked)}
-                label="0줄 변경 커밋 제외"
-              />
-              <Checkbox
-                size="sm"
-                color={actionButtonColor}
-                radius={0}
-                checked={subtractDeletions}
-                disabled={metricMode !== 'lines'}
-                onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
-                label="순변경으로 계산(+/-)"
+                checked={linkedMetricOptionChecked}
+                onChange={(event) => setLinkedMetricOptionChecked(event.currentTarget.checked)}
+                label={metricMode === 'commits' ? '0줄 변경 커밋 제외' : '순변경으로 계산(+/-)'}
               />
             </Group>
           </div>
@@ -1504,63 +1518,69 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                   </div>
 
                   <div className="battle-team-chart-block">
-                    <Text size="xs" c="dimmed" fw={700} mb={4}>팀 추이 꺾은선</Text>
-                    <div className="battle-team-line-wrap">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart
-                          data={teamLineRows}
-                          margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
-                          <XAxis
-                            dataKey="shortLabel"
-                            minTickGap={18}
-                            tick={{ fill: chartTickColor, fontSize: 11 }}
-                            axisLine={{ stroke: chartAxisStroke }}
-                            tickLine={{ stroke: chartAxisStroke }}
-                          />
-                          <YAxis
-                            allowDecimals={showProjectPercent}
-                            domain={teamLineDomain}
-                            tickFormatter={
-                              showProjectPercent
-                              ? (value) => `${Math.round(Number(value) || 0)}%`
-                                : undefined
-                            }
-                            tick={{ fill: chartTickColor, fontSize: 11 }}
-                            axisLine={{ stroke: chartAxisStroke }}
-                            tickLine={{ stroke: chartAxisStroke }}
-                          />
-                          {activeLineMarkerLabel && (
-                            <ReferenceLine x={activeLineMarkerLabel} stroke={chartReferenceStroke} strokeWidth={1.6} />
-                          )}
-                          {(useNetLines || teamLineDomain[0] < 0) && (
-                            <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
-                          )}
-                          <Tooltip
-                            content={
-                              <TeamLineTooltip
-                                teamSeriesByKey={teamSeriesByKey}
-                                valueFormatter={teamStackValueFormatter}
-                                showPercent={showProjectPercent}
-                              />
-                            }
-                          />
-                          {activeTeamTotalSeries.map((series) => (
-                            <Line
-                              key={`team-line-${series.teamId}`}
-                              type="monotone"
-                              dataKey={series.key}
-                              stroke={series.stroke}
-                              strokeWidth={1.9}
-                              dot={false}
-                              connectNulls
-                              isAnimationActive={false}
+                    <Text size="xs" c="dimmed" fw={700} mb={4}>TOP5 사용자 추이 꺾은선</Text>
+                    {topAuthorSeries.length === 0 ? (
+                      <Text size="sm" c="dimmed">해당 시점의 TOP5 사용자가 없습니다.</Text>
+                    ) : (
+                      <div className="battle-team-line-wrap">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart
+                            data={topAuthorLineRows}
+                            margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
+                          >
+                            <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                            <XAxis
+                              dataKey="index"
+                              interval="preserveStartEnd"
+                              tickFormatter={(value) => topAuthorLineRows[value]?.shortLabel ?? ''}
+                              minTickGap={18}
+                              tick={{ fill: chartTickColor, fontSize: 11 }}
+                              axisLine={{ stroke: chartAxisStroke }}
+                              tickLine={{ stroke: chartAxisStroke }}
                             />
-                          ))}
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
+                            <YAxis
+                              allowDecimals={showProjectPercent}
+                              domain={topAuthorLineDomain}
+                              tickFormatter={
+                                showProjectPercent
+                                  ? (value) => `${Math.round(Number(value) || 0)}%`
+                                  : undefined
+                              }
+                              tick={{ fill: chartTickColor, fontSize: 11 }}
+                              axisLine={{ stroke: chartAxisStroke }}
+                              tickLine={{ stroke: chartAxisStroke }}
+                            />
+                            {Number.isFinite(activeLineMarkerIndex) && (
+                              <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
+                            )}
+                            {(useNetLines || topAuthorLineDomain[0] < 0) && (
+                              <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                            )}
+                            <Tooltip
+                              content={
+                                <TeamLineTooltip
+                                  seriesByKey={topAuthorSeriesByKey}
+                                  valueFormatter={teamStackValueFormatter}
+                                  showPercent={showProjectPercent}
+                                />
+                              }
+                            />
+                            {topAuthorSeries.map((series) => (
+                              <Line
+                                key={`top-author-line-${series.id}`}
+                                type="monotone"
+                                dataKey={series.key}
+                                stroke={series.stroke}
+                                strokeWidth={1.9}
+                                dot={false}
+                                connectNulls
+                                isAnimationActive={false}
+                              />
+                            ))}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
