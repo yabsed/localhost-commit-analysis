@@ -180,6 +180,26 @@ body {
   min-height: 0;
 }
 
+.battle-team-line-wrap {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.battle-team-visual-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.battle-team-chart-block {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .left-pane,
 .right-pane {
   min-height: 0;
@@ -528,6 +548,10 @@ body {
 
   .edge-legend {
     justify-content: flex-start;
+  }
+
+  .battle-team-visual-layout {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -20,6 +20,9 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
+  Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -34,6 +37,8 @@ const IDENTITY_RULES_STORAGE_KEY = 'wackathon-identity-rules';
 const DEFAULT_TOP_LONG_COMMIT_PERCENT = 15;
 const STATIC_DATA_MANIFEST_PATH = 'data/manifest.json';
 const IS_STATIC_BUILD = import.meta.env.PROD;
+const BATTLE_TIMELINE_START_MS = Date.parse('2026-02-21T15:00:00+09:00');
+const BATTLE_TIMELINE_END_MS = Date.parse('2026-02-22T09:00:00+09:00');
 
 const TEAM_BASE_COLORS = [
   '#1d4ed8',
@@ -586,6 +591,57 @@ function buildStackValueBounds(rows, series) {
   return [min, max];
 }
 
+function buildSeriesValueBounds(rows, series) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(series) || series.length === 0) {
+    return [0, 1];
+  }
+
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+
+  for (const row of rows) {
+    for (const item of series) {
+      const value = Number(row[item.key]);
+      if (!Number.isFinite(value)) {
+        continue;
+      }
+      if (value < min) {
+        min = value;
+      }
+      if (value > max) {
+        max = value;
+      }
+    }
+  }
+
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return [0, 1];
+  }
+  if (min === max) {
+    if (min === 0) {
+      return [0, 1];
+    }
+    return [min - 1, max + 1];
+  }
+
+  return [min, max];
+}
+
+function formatBattleMomentShort(timestampMs) {
+  const date = new Date(Number(timestampMs) || 0);
+  if (!Number.isFinite(date.getTime())) {
+    return '-';
+  }
+  return new Intl.DateTimeFormat('ko-KR', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Asia/Seoul',
+  }).format(date);
+}
+
 function TeamStackedTooltip({
   active,
   payload,
@@ -626,6 +682,55 @@ function TeamStackedTooltip({
                 <Text size="sm">{author?.label ?? item.dataKey}</Text>
               </Group>
               <Text size="sm" fw={700}>{valueFormatter(item.value)} {unitLabel}</Text>
+            </Group>
+          );
+        })}
+      </Stack>
+    </Paper>
+  );
+}
+
+function TeamLineTooltip({
+  active,
+  payload,
+  label,
+  teamSeriesByKey,
+  valueFormatter = formatNumber,
+  showPercent = false,
+}) {
+  if (!active || !Array.isArray(payload) || payload.length === 0) {
+    return null;
+  }
+
+  const normalized = payload
+    .filter((item) => Number.isFinite(Number(item.value)))
+    .sort((a, b) => Math.abs(Number(b.value)) - Math.abs(Number(a.value)));
+
+  if (!normalized.length) {
+    return null;
+  }
+
+  return (
+    <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
+      <Text fw={700} mb={6}>{label}</Text>
+      <Stack gap={4}>
+        {normalized.map((item) => {
+          const team = teamSeriesByKey[item.dataKey];
+          const value = Number(item.value) || 0;
+          const valueText = showPercent
+            ? `${Number(value).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+            : valueFormatter(value);
+          return (
+            <Group key={`${item.dataKey}-${label}`} justify="space-between" gap="xl">
+              <Group gap={8}>
+                <span
+                  className="swatch"
+                  style={{ backgroundColor: item.color }}
+                  aria-hidden="true"
+                />
+                <Text size="sm">{team?.teamLabel ?? item.name ?? item.dataKey}</Text>
+              </Group>
+              <Text size="sm" fw={700}>{valueText}</Text>
             </Group>
           );
         })}
@@ -850,12 +955,31 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     return excluded;
   }, [excludeTopLongCommits, excludeZeroLengthCommit, topLongestCommitIds, zeroLengthCommitIds]);
 
+  const timelineWindowNodes = useMemo(
+    () => nodes.filter((node) => {
+      const timestampMs = Number(node.timestampMs) || 0;
+      return timestampMs >= BATTLE_TIMELINE_START_MS && timestampMs <= BATTLE_TIMELINE_END_MS;
+    }),
+    [nodes]
+  );
+
+  const activeTeamIdsInWindow = useMemo(() => {
+    const ids = new Set();
+    for (const node of timelineWindowNodes) {
+      if (activeExcludedCommitIds?.has(node.id)) {
+        continue;
+      }
+      ids.add(node.teamId);
+    }
+    return ids;
+  }, [timelineWindowNodes, activeExcludedCommitIds]);
+
   const metricForTrend = metricMode === 'commits' ? 'commits' : 'code';
   const useNetLines = metricMode === 'lines' && subtractDeletions;
 
   const teamRows = useMemo(
     () => buildTeamRows(
-      nodes,
+      timelineWindowNodes,
       teamTotalSeries,
       metricForTrend,
       useNetLines,
@@ -863,7 +987,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       activeExcludedCommitIds
     ),
     [
-      nodes,
+      timelineWindowNodes,
       teamTotalSeries,
       metricForTrend,
       useNetLines,
@@ -874,7 +998,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const authorRows = useMemo(
     () => buildAuthorRows(
-      nodes,
+      timelineWindowNodes,
       authorSeries,
       authorKeyById,
       metricForTrend,
@@ -883,7 +1007,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       activeExcludedCommitIds
     ),
     [
-      nodes,
+      timelineWindowNodes,
       authorSeries,
       authorKeyById,
       metricForTrend,
@@ -936,9 +1060,32 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     };
   }, [activeTrendRows, activeTrendIndex]);
 
+  const handleDialWheel = useCallback((event) => {
+    if (activeTrendRows.length <= 1) {
+      return;
+    }
+    event.preventDefault();
+    const delta = Number(event.deltaY) || 0;
+    if (delta === 0) {
+      return;
+    }
+    const direction = delta > 0 ? 1 : -1;
+    const step = Math.max(1, Math.round(Math.abs(delta) / 90));
+    setActiveTrendIndex((prev) => {
+      const fallbackIndex = activeTrendRows.length - 1;
+      const currentIndex = Number.isInteger(prev) ? prev : fallbackIndex;
+      return Math.max(0, Math.min(fallbackIndex, currentIndex + direction * step));
+    });
+  }, [activeTrendRows.length]);
+
   const teamById = useMemo(
     () => new Map(teams.map((team) => [team.id, team])),
     [teams]
+  );
+
+  const activeTeamTotalSeries = useMemo(
+    () => teamTotalSeries.filter((series) => activeTeamIdsInWindow.has(series.teamId)),
+    [teamTotalSeries, activeTeamIdsInWindow]
   );
 
   const authorByKey = useMemo(
@@ -962,9 +1109,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
           magnitude: Math.abs(signedValue),
         };
       })
-      .filter((item) => item.magnitude > 0)
+      .filter((item) => item.magnitude > 0 && activeTeamIdsInWindow.has(item.teamId))
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, authorSeries, teamById]);
+  }, [activeMoment, authorSeries, teamById, activeTeamIdsInWindow]);
 
   const teamStackRows = useMemo(() => {
     const row = activeMoment?.row;
@@ -972,15 +1119,15 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       return [];
     }
 
-    return teams.map((team) => {
+    return activeTeamTotalSeries.map((teamSeries) => {
       const stackRow = {
-        teamId: team.id,
-        teamLabel: team.label,
+        teamId: teamSeries.teamId,
+        teamLabel: teamById.get(teamSeries.teamId)?.label ?? teamSeries.label,
         total: 0,
       };
 
       for (const author of authorSeries) {
-        const value = author.teamId === team.id
+        const value = author.teamId === teamSeries.teamId
           ? (Number(row[author.key]) || 0)
           : 0;
         stackRow[author.key] = value;
@@ -989,7 +1136,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
       return stackRow;
     });
-  }, [activeMoment, teams, authorSeries]);
+  }, [activeMoment, activeTeamTotalSeries, authorSeries, teamById]);
 
   const activeTeamAuthors = useMemo(
     () => authorSeries.filter((author) =>
@@ -997,7 +1144,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [authorSeries, teamStackRows]
   );
 
-  const teamStackSeries = activeTeamAuthors.length > 0 ? activeTeamAuthors : authorSeries;
+  const teamStackSeries = activeTeamAuthors;
 
   const teamStackDomain = useMemo(
     () => buildStackValueBounds(teamStackRows, teamStackSeries),
@@ -1016,11 +1163,80 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
     : formatNumber;
 
+  const teamSeriesByKey = useMemo(
+    () => Object.fromEntries(activeTeamTotalSeries.map((series) => [series.key, {
+      ...series,
+      teamLabel: teamById.get(series.teamId)?.label ?? series.label,
+    }])),
+    [activeTeamTotalSeries, teamById]
+  );
+
+  const teamLineRows = useMemo(() => {
+    if (!activeTrendRows.length || !activeTeamTotalSeries.length) {
+      return [];
+    }
+    return activeTrendRows.map((row, index) => {
+      const lineRow = {
+        index,
+        timestampMs: Number(row.timestampMs) || 0,
+        label: formatKoreanDateTime(row.timestampMs),
+        shortLabel: formatBattleMomentShort(row.timestampMs),
+      };
+      for (const series of activeTeamTotalSeries) {
+        lineRow[series.key] = Number(row[series.key]) || 0;
+      }
+      return lineRow;
+    });
+  }, [activeTrendRows, activeTeamTotalSeries]);
+
+  const teamLineDomain = useMemo(
+    () => buildSeriesValueBounds(teamLineRows, activeTeamTotalSeries),
+    [teamLineRows, activeTeamTotalSeries]
+  );
+
+  const dialWindowText = useMemo(
+    () => `${formatKoreanDateTime(BATTLE_TIMELINE_START_MS)} ~ ${formatKoreanDateTime(BATTLE_TIMELINE_END_MS)}`,
+    []
+  );
+
+  const renderTeamSegmentLabel = useCallback((props, authorLabel) => {
+    const safeWidth = Number(props?.width) || 0;
+    const rawHeight = Number(props?.height) || 0;
+    const safeHeight = Math.abs(rawHeight);
+    const magnitude = Math.abs(Number(props?.value) || 0);
+    if (!authorLabel || magnitude === 0 || safeWidth < 54 || safeHeight < 22) {
+      return null;
+    }
+
+    const baseX = Number(props?.x) || 0;
+    const baseY = Number(props?.y) || 0;
+    const isNegative = rawHeight < 0;
+    const textX = baseX + (safeWidth / 2);
+    const textY = isNegative ? baseY + safeHeight - 6 : baseY + 13;
+
+    return (
+      <text
+        x={textX}
+        y={textY}
+        textAnchor="middle"
+        fontSize={10}
+        fontWeight={700}
+        fill="rgba(255, 255, 255, 0.96)"
+        stroke="rgba(0, 0, 0, 0.42)"
+        strokeWidth={2}
+        paintOrder="stroke"
+        pointerEvents="none"
+      >
+        {authorLabel}
+      </text>
+    );
+  }, []);
+
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} 팀+사용자 통합 추이`;
 
   const trendDescription = showProjectPercent
-    ? '시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다.'
-    : `시점 다이얼 기준으로 사용자 랭킹과 팀별 막대그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'})`;
+    ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
+    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대/꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1144,7 +1360,13 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             </Alert>
           )}
 
-          <Paper withBorder radius="md" p="sm" className="battle-dial-panel">
+          <Paper
+            withBorder
+            radius="md"
+            p="sm"
+            className="battle-dial-panel"
+            onWheel={handleDialWheel}
+          >
             <Group justify="space-between" align="center" mb={4}>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>시점 다이얼</Text>
               <Text size="xs" c="dimmed">
@@ -1161,6 +1383,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
               color={actionButtonColor}
               label={null}
             />
+            <Text size="xs" c="dimmed" mt={6}>
+              다이얼 범위: {dialWindowText} (휠 스크롤 가능)
+            </Text>
           </Paper>
 
           <div className="battle-chart-layout">
@@ -1193,69 +1418,140 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
             <Paper withBorder radius="md" p="sm" className="battle-rect-panel">
               <Group justify="space-between" align="center" mb={8}>
-                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀 막대그래프</Text>
-                <Badge color="gray" variant="light">{teamStackRows.length}개 팀</Badge>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀 막대/꺾은선 그래프</Text>
+                <Badge color="gray" variant="light">{activeTeamTotalSeries.length}개 팀</Badge>
               </Group>
-              <div className="battle-team-bar-wrap">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={teamStackRows}
-                    stackOffset="sign"
-                    margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
-                    <XAxis
-                      dataKey="teamLabel"
-                      interval={0}
-                      height={teamStackRows.length > 6 ? 44 : 26}
-                      angle={teamStackRows.length > 6 ? -18 : 0}
-                      textAnchor={teamStackRows.length > 6 ? 'end' : 'middle'}
-                      tick={{ fill: chartTickColor, fontSize: 11 }}
-                      axisLine={{ stroke: chartAxisStroke }}
-                      tickLine={{ stroke: chartAxisStroke }}
-                    />
-                    <YAxis
-                      allowDecimals={showProjectPercent}
-                      domain={teamStackDomain}
-                      tickFormatter={
-                        showProjectPercent
-                          ? (value) => `${Math.round(Number(value) || 0)}%`
-                          : undefined
-                      }
-                      tick={{ fill: chartTickColor, fontSize: 11 }}
-                      axisLine={{ stroke: chartAxisStroke }}
-                      tickLine={{ stroke: chartAxisStroke }}
-                    />
-                    {(useNetLines || hasNegativeTeamValue) && (
-                      <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
-                    )}
-                    <Tooltip
-                      content={
-                        <TeamStackedTooltip
-                          authorByKey={authorByKey}
-                          unitLabel={teamStackUnitLabel}
-                          valueFormatter={teamStackValueFormatter}
-                        />
-                      }
-                    />
-                    {teamStackSeries.map((author) => (
-                      <Bar
-                        key={`team-stack-${author.key}`}
-                        dataKey={author.key}
-                        stackId={metricMode}
-                        fill={author.stroke}
-                      >
-                        {teamStackRows.map((row, index) => (
-                          <Cell
-                            key={`${author.key}-${row?.teamId ?? index}`}
-                            radius={[4, 4, 4, 4]}
+              {activeTeamTotalSeries.length === 0 ? (
+                <Text size="sm" c="dimmed">
+                  지정된 시점 범위(2026-02-21 15:00 ~ 2026-02-22 09:00)에 커밋이 있는 팀이 없습니다.
+                </Text>
+              ) : (
+                <div className="battle-team-visual-layout">
+                  <div className="battle-team-chart-block">
+                    <Text size="xs" c="dimmed" fw={700} mb={4}>스택 막대</Text>
+                    <div className="battle-team-bar-wrap">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={teamStackRows}
+                          stackOffset="sign"
+                          margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                          <XAxis
+                            dataKey="teamLabel"
+                            interval={0}
+                            height={teamStackRows.length > 6 ? 44 : 26}
+                            angle={teamStackRows.length > 6 ? -18 : 0}
+                            textAnchor={teamStackRows.length > 6 ? 'end' : 'middle'}
+                            tick={{ fill: chartTickColor, fontSize: 11 }}
+                            axisLine={{ stroke: chartAxisStroke }}
+                            tickLine={{ stroke: chartAxisStroke }}
                           />
-                        ))}
-                      </Bar>
-                    ))}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+                          <YAxis
+                            allowDecimals={showProjectPercent}
+                            domain={teamStackDomain}
+                            tickFormatter={
+                              showProjectPercent
+                                ? (value) => `${Math.round(Number(value) || 0)}%`
+                                : undefined
+                            }
+                            tick={{ fill: chartTickColor, fontSize: 11 }}
+                            axisLine={{ stroke: chartAxisStroke }}
+                            tickLine={{ stroke: chartAxisStroke }}
+                          />
+                          {(useNetLines || hasNegativeTeamValue) && (
+                            <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                          )}
+                          <Tooltip
+                            content={
+                              <TeamStackedTooltip
+                                authorByKey={authorByKey}
+                                unitLabel={teamStackUnitLabel}
+                                valueFormatter={teamStackValueFormatter}
+                              />
+                            }
+                          />
+                          {teamStackSeries.map((author) => (
+                            <Bar
+                              key={`team-stack-${author.key}`}
+                              dataKey={author.key}
+                              stackId={metricMode}
+                              fill={author.stroke}
+                            >
+                              <LabelList
+                                dataKey={author.key}
+                                content={(props) => renderTeamSegmentLabel(props, author.label)}
+                              />
+                              {teamStackRows.map((row, index) => (
+                                <Cell
+                                  key={`${author.key}-${row?.teamId ?? index}`}
+                                  radius={[4, 4, 4, 4]}
+                                />
+                              ))}
+                            </Bar>
+                          ))}
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="battle-team-chart-block">
+                    <Text size="xs" c="dimmed" fw={700} mb={4}>팀 추이 꺾은선</Text>
+                    <div className="battle-team-line-wrap">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={teamLineRows}
+                          margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                          <XAxis
+                            dataKey="shortLabel"
+                            minTickGap={18}
+                            tick={{ fill: chartTickColor, fontSize: 11 }}
+                            axisLine={{ stroke: chartAxisStroke }}
+                            tickLine={{ stroke: chartAxisStroke }}
+                          />
+                          <YAxis
+                            allowDecimals={showProjectPercent}
+                            domain={teamLineDomain}
+                            tickFormatter={
+                              showProjectPercent
+                                ? (value) => `${Math.round(Number(value) || 0)}%`
+                                : undefined
+                            }
+                            tick={{ fill: chartTickColor, fontSize: 11 }}
+                            axisLine={{ stroke: chartAxisStroke }}
+                            tickLine={{ stroke: chartAxisStroke }}
+                          />
+                          {(useNetLines || teamLineDomain[0] < 0) && (
+                            <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                          )}
+                          <Tooltip
+                            content={
+                              <TeamLineTooltip
+                                teamSeriesByKey={teamSeriesByKey}
+                                valueFormatter={teamStackValueFormatter}
+                                showPercent={showProjectPercent}
+                              />
+                            }
+                          />
+                          {activeTeamTotalSeries.map((series) => (
+                            <Line
+                              key={`team-line-${series.teamId}`}
+                              type="monotone"
+                              dataKey={series.key}
+                              stroke={series.stroke}
+                              strokeWidth={1.9}
+                              dot={false}
+                              connectNulls
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              )}
             </Paper>
           </div>
         </Card>
