@@ -7,6 +7,7 @@ import {
   Checkbox,
   Group,
   Loader,
+  Modal,
   NumberInput,
   Paper,
   Select,
@@ -954,6 +955,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     () => readStoredIdentityRulesText() || DEFAULT_IDENTITY_RULES_TEXT
   );
   const [logFiles, setLogFiles] = useState([]);
+  const [isTeamFilterModalOpen, setIsTeamFilterModalOpen] = useState(false);
+  const [removedTeamIds, setRemovedTeamIds] = useState([]);
 
   const [entityMode, setEntityMode] = useState('repo');
   const [rightChartMode, setRightChartMode] = useState('repo_rank');
@@ -988,6 +991,25 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   const chartReferenceStroke = colorScheme === 'dark' ? 'rgba(218, 228, 248, 0.6)' : 'rgba(24, 24, 24, 0.45)';
   const chartTickColor = colorScheme === 'dark' ? '#c0cbdf' : '#575757';
   const chartAxisStroke = colorScheme === 'dark' ? '#7b879f' : '#9b9b9b';
+  const teamFilterOptions = useMemo(() => {
+    const seenTeamIds = new Set();
+    const options = [];
+    for (const file of logFiles) {
+      const teamId = teamIdFromFileName(file.name);
+      if (seenTeamIds.has(teamId)) {
+        continue;
+      }
+      seenTeamIds.add(teamId);
+      options.push({
+        id: teamId,
+        label: teamId,
+        fileName: file.name,
+      });
+    }
+    return options;
+  }, [logFiles]);
+
+  const removedTeamIdSet = useMemo(() => new Set(removedTeamIds), [removedTeamIds]);
 
   const loadLogFiles = useCallback(async () => {
     setFileListLoading(true);
@@ -1027,6 +1049,19 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   useEffect(() => {
     loadLogFiles();
   }, [loadLogFiles]);
+
+  useEffect(() => {
+    if (!teamFilterOptions.length) {
+      setRemovedTeamIds((prev) => (prev.length > 0 ? [] : prev));
+      return;
+    }
+
+    const availableTeamIds = new Set(teamFilterOptions.map((item) => item.id));
+    setRemovedTeamIds((prev) => {
+      const next = prev.filter((id) => availableTeamIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [teamFilterOptions]);
 
   useEffect(() => {
     let mounted = true;
@@ -1122,9 +1157,18 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     };
   }, [logFiles]);
 
+  const activeTeamPayloads = useMemo(() => {
+    if (!removedTeamIdSet.size) {
+      return teamPayloads;
+    }
+    return teamPayloads.filter(
+      (teamPayload) => !removedTeamIdSet.has(teamIdFromFileName(teamPayload.fileName))
+    );
+  }, [teamPayloads, removedTeamIdSet]);
+
   const prepared = useMemo(
-    () => buildPreparedTeamBattle(teamPayloads, identityRules.pairs),
-    [teamPayloads, identityRules]
+    () => buildPreparedTeamBattle(activeTeamPayloads, identityRules.pairs),
+    [activeTeamPayloads, identityRules]
   );
 
   const nodes = prepared.nodes;
@@ -1739,6 +1783,21 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                   라인 수
                 </Button>
               </Group>
+              <Group gap={6} wrap="nowrap">
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={removedTeamIds.length > 0 ? 'filled' : 'default'}
+                  onClick={() => setIsTeamFilterModalOpen(true)}
+                  disabled={teamFilterOptions.length === 0}
+                >
+                  팀 제거 목록
+                </Button>
+                {removedTeamIds.length > 0 && (
+                  <Badge color="gray" variant="light">{removedTeamIds.length}개 제외</Badge>
+                )}
+              </Group>
             </Group>
           </Group>
 
@@ -2022,6 +2081,69 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
           </div>
         </Card>
       </div>
+
+      <Modal
+        opened={isTeamFilterModalOpen}
+        onClose={() => setIsTeamFilterModalOpen(false)}
+        title="팀 제거 선택"
+        centered
+        size="md"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            체크한 팀은 배틀 그래프와 랭킹에서 제외됩니다.
+          </Text>
+          <Group justify="space-between">
+            <Badge color="gray" variant="light">총 {teamFilterOptions.length}개 팀</Badge>
+            <Badge color="gray" variant="light">제외 {removedTeamIds.length}개</Badge>
+          </Group>
+          {teamFilterOptions.length === 0 ? (
+            <Text size="sm" c="dimmed">선택 가능한 팀이 없습니다.</Text>
+          ) : (
+            <div style={{ maxHeight: 320, overflowY: 'auto', paddingRight: 4 }}>
+              <Stack gap={6}>
+                {teamFilterOptions.map((teamOption) => (
+                  <Checkbox
+                    key={`team-filter-${teamOption.id}`}
+                    checked={removedTeamIdSet.has(teamOption.id)}
+                    onChange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      setRemovedTeamIds((prev) => {
+                        if (checked) {
+                          if (prev.includes(teamOption.id)) {
+                            return prev;
+                          }
+                          return [...prev, teamOption.id];
+                        }
+                        return prev.filter((id) => id !== teamOption.id);
+                      });
+                    }}
+                    label={
+                      <Group gap={8} wrap="nowrap">
+                        <Text size="sm" fw={700}>{teamOption.label}</Text>
+                        <Text size="xs" c="dimmed">{teamOption.fileName}</Text>
+                      </Group>
+                    }
+                  />
+                ))}
+              </Stack>
+            </div>
+          )}
+          <Group justify="space-between">
+            <Button
+              variant="subtle"
+              color="gray"
+              onClick={() => setRemovedTeamIds([])}
+              disabled={removedTeamIds.length === 0}
+            >
+              모두 복원
+            </Button>
+            <Button color={actionButtonColor} onClick={() => setIsTeamFilterModalOpen(false)}>
+              닫기
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </main>
   );
 }
