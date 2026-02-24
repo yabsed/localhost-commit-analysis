@@ -67,12 +67,6 @@ const REPO_BATTLE_SERIES = [
     label: '프런트',
     stroke: '#1d4ed8',
   },
-  {
-    id: 'other',
-    key: 'repo_group_other',
-    label: '기타',
-    stroke: '#475569',
-  },
 ];
 
 function resolveAppAssetUrl(relativePath) {
@@ -638,7 +632,7 @@ function classifyRepoBattleGroup(repoName = '') {
   ) {
     return 'frontend';
   }
-  return 'other';
+  return null;
 }
 
 function buildRepoBattleRows(
@@ -661,7 +655,9 @@ function buildRepoBattleRows(
     if (!excludedCommitIds?.has(node.id)) {
       const delta = trendDelta(node, metric, subtractDeletions);
       const groupId = classifyRepoBattleGroup(node.repoName);
-      totalsByGroupId[groupId] += delta;
+      if (groupId && Object.prototype.hasOwnProperty.call(totalsByGroupId, groupId)) {
+        totalsByGroupId[groupId] += delta;
+      }
     }
 
     const row = {
@@ -1510,7 +1506,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       }
       const delta = trendDelta(node, metricForTrend, useNetLines);
       const groupId = classifyRepoBattleGroup(node.repoName);
-      totalsByGroupId[groupId] += delta;
+      if (groupId && Object.prototype.hasOwnProperty.call(totalsByGroupId, groupId)) {
+        totalsByGroupId[groupId] += delta;
+      }
     }
     return totalsByGroupId;
   }, [
@@ -1578,9 +1576,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   const lineChartSeriesByKey = entityMode === 'repo' ? repoBattleSeriesByKey : userLineSeriesByKey;
   const lineChartDomain = entityMode === 'repo' ? repoBattleDomain : userLineDomain;
   const lineChartValueFormatter = formatNumber;
-  const lineChartTitle = entityMode === 'repo' ? '레포 3진영 꺾은선' : '사용자 누적 꺾은선';
+  const lineChartTitle = entityMode === 'repo' ? '레포 2진영 꺾은선' : '사용자 누적 꺾은선';
   const lineChartHint = entityMode === 'repo'
-    ? '백엔드 vs 프런트 vs 기타'
+    ? '백엔드 vs 프런트'
     : `상위 ${Math.min(8, userLineSeries.length)}명 누적 추이`;
   const lineChartEmptyText = entityMode === 'repo'
     ? '해당 시점의 레포 데이터가 없습니다.'
