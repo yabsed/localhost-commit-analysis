@@ -1,0 +1,2163 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Group,
+  Loader,
+  Modal,
+  NumberInput,
+  Paper,
+  Select,
+  SegmentedControl,
+  Stack,
+  Text,
+  Textarea,
+  Title,
+} from '@mantine/core';
+import {
+  IconAlertCircle,
+  IconMoon,
+  IconSun,
+} from '@tabler/icons-react';
+import {
+  Bar,
+  BarChart,
+  Cell,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  ReferenceLine,
+} from 'recharts';
+import {
+  formatKoreanDateTime,
+  formatNumber,
+  processLogData,
+} from './logData';
+
+const DEFAULT_IDENTITY_RULES_TEXT = 'Seo Minseok - user983740';
+const DEFAULT_IDENTITY_RULES_FILE = 'author_identity_rules.txt';
+const IDENTITY_RULES_STORAGE_KEY = 'wackathon-identity-rules';
+const DEFAULT_TOP_LONG_COMMIT_PERCENT = 15;
+const DATA_SOURCE_QUERY_KEY = 'source';
+const PROJECT_LINE_FALLBACK_STROKES_LIGHT = ['#111111', '#4b4b4b', '#777777', '#9a9a9a'];
+const PROJECT_LINE_FALLBACK_STROKES_DARK = ['#e6e6e6', '#b9c0cf', '#8e98aa', '#727b8b'];
+const STATIC_DATA_MANIFEST_PATH = 'data/manifest.json';
+const IS_STATIC_BUILD = import.meta.env.PROD;
+
+function resolveAppAssetUrl(relativePath) {
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const normalizedPath = String(relativePath || '').replace(/^\/+/, '');
+  return `${normalizedBase}${normalizedPath}`;
+}
+
+function resolveAppRouteUrl(relativePath = '') {
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const normalizedPath = String(relativePath || '').replace(/^\/+/, '');
+  return normalizedPath ? `${normalizedBase}${normalizedPath}` : normalizedBase;
+}
+
+async function fetchStaticDataManifest() {
+  const res = await fetch(resolveAppAssetUrl(STATIC_DATA_MANIFEST_PATH));
+  if (!res.ok) {
+    throw new Error(`정적 데이터 manifest 로드 실패: ${res.status}`);
+  }
+  return res.json();
+}
+
+function normalizeFileEntries(items, extension) {
+  const files = Array.isArray(items) ? items : [];
+  return files
+    .map((item) => ({
+      name: typeof item?.name === 'string' ? item.name : '',
+      sizeBytes: Number(item?.sizeBytes) || 0,
+      modifiedAtMs: Number(item?.modifiedAtMs) || 0,
+      path: typeof item?.path === 'string' ? item.path : null,
+    }))
+    .filter((item) => item.name && item.name.endsWith(extension))
+    .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs || a.name.localeCompare(b.name));
+}
+
+function readDataSourceFromUrl() {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const url = new URL(window.location.href);
+  const value = url.searchParams.get(DATA_SOURCE_QUERY_KEY);
+  return value ? String(value).trim() : null;
+}
+
+function replaceDataSourceInUrl(fileName) {
+  if (typeof window === 'undefined' || !fileName) {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set(DATA_SOURCE_QUERY_KEY, fileName);
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (nextUrl === currentUrl) {
+    return;
+  }
+  window.history.replaceState({}, '', nextUrl);
+}
+
+function splitIdentityRuleLine(line) {
+  const source = String(line || '').trim();
+  if (!source || source.startsWith('#')) {
+    return null;
+  }
+
+  const splitBy = (delimiter) => {
+    const index = source.indexOf(delimiter);
+    if (index < 0) {
+      return null;
+    }
+    const left = source.slice(0, index).trim();
+    const right = source.slice(index + delimiter.length).trim();
+    if (!left || !right) {
+      return null;
+    }
+    return [left, right];
+  };
+
+  return (
+    splitBy('->') ??
+    splitBy(' - ') ??
+    splitBy(',') ??
+    splitBy('\t') ??
+    (() => {
+      const firstDash = source.indexOf('-');
+      const lastDash = source.lastIndexOf('-');
+      if (firstDash <= 1 || firstDash !== lastDash || firstDash >= source.length - 2) {
+        return null;
+      }
+      const left = source.slice(0, firstDash).trim();
+      const right = source.slice(firstDash + 1).trim();
+      if (left.length < 2 || right.length < 2) {
+        return null;
+      }
+      return [left, right];
+    })()
+  );
+}
+
+function parseIdentityRules(rawText = '') {
+  const lines = String(rawText || '').split('\n');
+  const pairs = [];
+  const invalidLines = [];
+
+  lines.forEach((line, index) => {
+    const source = String(line || '').trim();
+    if (!source || source.startsWith('#')) {
+      return;
+    }
+
+    const pair = splitIdentityRuleLine(source);
+    if (!pair) {
+      invalidLines.push({ lineNumber: index + 1, value: source });
+      return;
+    }
+    pairs.push(pair);
+  });
+
+  return {
+    pairs,
+    invalidLines,
+  };
+}
+
+function StackedTooltip({
+  active,
+  payload,
+  label,
+  authorByKey,
+  unitLabel,
+  valueFormatter = formatNumber,
+}) {
+  if (!active || !payload || payload.length === 0) {
+    return null;
+  }
+
+  const normalized = payload
+    .filter((item) => {
+      const value = Number(item.value);
+      return Number.isFinite(value) && value !== 0;
+    })
+    .sort((a, b) => Math.abs(Number(b.value)) - Math.abs(Number(a.value)));
+
+  return (
+    <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
+      <Text fw={700} mb={6}>{label}</Text>
+      <Stack gap={4}>
+        {normalized.map((item) => {
+          const author = authorByKey[item.dataKey];
+          return (
+            <Group key={`${item.dataKey}-${label}`} justify="space-between" gap="xl">
+              <Group gap={8}>
+                <span
+                  className="swatch"
+                  style={{ backgroundColor: item.color }}
+                  aria-hidden="true"
+                />
+                <Text size="sm">{author?.displayName ?? item.dataKey}</Text>
+              </Group>
+              <Text size="sm" fw={700}>{valueFormatter(item.value)} {unitLabel}</Text>
+            </Group>
+          );
+        })}
+      </Stack>
+    </Paper>
+  );
+}
+
+function buildEdgeClass(type) {
+  if (type === 'project') {
+    return 'timeline-edge timeline-edge-project';
+  }
+  if (type === 'precedence') {
+    return 'timeline-edge timeline-edge-precedence';
+  }
+  return 'timeline-edge timeline-edge-author';
+}
+
+function selectedCommitText(node) {
+  if (!node) {
+    return '커밋을 클릭하면 상세 정보가 표시됩니다.';
+  }
+
+  return [
+    `[${node.lane?.label}]`,
+    node.title,
+    `${node.commitShortHash} · ${formatKoreanDateTime(node.timestampMs)}`,
+  ].join(' ');
+}
+
+function buildCumulativeRows(
+  projects,
+  authors,
+  nodes,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  const commitRowsByProject = new Map();
+  const lineRowsByProject = new Map();
+
+  for (const project of projects) {
+    const commitRow = {
+      projectId: project.id,
+      projectLabel: project.label,
+      total: 0,
+    };
+    const lineRow = {
+      projectId: project.id,
+      projectLabel: project.label,
+      total: 0,
+    };
+
+    for (const author of authors) {
+      commitRow[author.key] = 0;
+      lineRow[author.key] = 0;
+    }
+
+    commitRowsByProject.set(project.id, commitRow);
+    lineRowsByProject.set(project.id, lineRow);
+  }
+
+  for (const node of nodes) {
+    if (excludedCommitIds?.has(node.id)) {
+      continue;
+    }
+
+    const commitRow = commitRowsByProject.get(node.projectId);
+    const lineRow = lineRowsByProject.get(node.projectId);
+
+    if (!commitRow || !lineRow || !node.authorKey) {
+      continue;
+    }
+
+    commitRow[node.authorKey] += 1;
+    commitRow.total += 1;
+
+    const touchedLines = Number(node.touchedLines) || 0;
+    const netLines = (Number(node.additions) || 0) - (Number(node.deletions) || 0);
+    const lineValue = subtractDeletions ? netLines : touchedLines;
+    lineRow[node.authorKey] += lineValue;
+    lineRow.total += lineValue;
+  }
+
+  return {
+    commitRows: projects.map((project) => commitRowsByProject.get(project.id)),
+    lineRows: projects.map((project) => lineRowsByProject.get(project.id)),
+  };
+}
+
+function trendDelta(node, metric, subtractDeletions = false) {
+  if (metric === 'commits') {
+    return 1;
+  }
+  return subtractDeletions
+    ? (Number(node.additions) || 0) - (Number(node.deletions) || 0)
+    : Number(node.touchedLines) || 0;
+}
+
+function commitLength(node) {
+  const touched = Number(node.touchedLines);
+  if (Number.isFinite(touched) && touched >= 0) {
+    return touched;
+  }
+  return (Number(node.additions) || 0) + (Number(node.deletions) || 0);
+}
+
+function buildTopLongestCommitIdSet(nodes, topPercent = 0.1) {
+  if (!Array.isArray(nodes) || nodes.length === 0 || topPercent <= 0) {
+    return new Set();
+  }
+
+  const byProject = new Map();
+  for (const node of nodes) {
+    const projectId = node.projectId ?? '__unknown_project__';
+    if (!byProject.has(projectId)) {
+      byProject.set(projectId, []);
+    }
+    byProject.get(projectId).push(node);
+  }
+
+  const excludedIds = new Set();
+  for (const projectNodes of byProject.values()) {
+    const removeCount = Math.ceil(projectNodes.length * topPercent);
+    if (removeCount <= 0) {
+      continue;
+    }
+
+    const ranked = projectNodes
+      .map((node) => ({
+        id: node.id,
+        length: commitLength(node),
+        timestampMs: Number(node.timestampMs) || 0,
+      }))
+      .sort((a, b) => (
+        b.length - a.length
+        || b.timestampMs - a.timestampMs
+        || String(a.id).localeCompare(String(b.id))
+      ));
+
+    for (const item of ranked.slice(0, removeCount)) {
+      excludedIds.add(item.id);
+    }
+  }
+
+  return excludedIds;
+}
+
+function buildZeroLengthCommitIdSet(nodes) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return new Set();
+  }
+
+  const excludedIds = new Set();
+  for (const node of nodes) {
+    if (commitLength(node) === 0) {
+      excludedIds.add(node.id);
+    }
+  }
+  return excludedIds;
+}
+
+function buildProjectTrendRows(
+  nodes,
+  projects,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  const totalsByProjectId = Object.fromEntries(projects.map((line) => [line.id, 0]));
+  const rows = nodes.map((node, index) => {
+    const delta = excludedCommitIds?.has(node.id)
+      ? 0
+      : trendDelta(node, metric, subtractDeletions);
+    totalsByProjectId[node.projectId] = (Number(totalsByProjectId[node.projectId]) || 0) + delta;
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+    };
+
+    for (const projectLine of projects) {
+      row[projectLine.key] = Number(totalsByProjectId[projectLine.id]) || 0;
+    }
+
+    return row;
+  });
+
+  return rows;
+}
+
+function solveMaxWeightAssignment(weightMatrix) {
+  const rowCount = weightMatrix.length;
+  const colCount = rowCount > 0 ? weightMatrix[0].length : 0;
+  if (rowCount === 0 || colCount === 0) {
+    return [];
+  }
+
+  const maxWeight = Math.max(
+    0,
+    ...weightMatrix.flatMap((row) => row.map((value) => Number(value) || 0))
+  );
+  const cost = weightMatrix.map((row) =>
+    row.map((value) => maxWeight - (Number(value) || 0))
+  );
+
+  // Hungarian algorithm (min-cost assignment) on a rectangular matrix where rowCount <= colCount.
+  const u = new Array(rowCount + 1).fill(0);
+  const v = new Array(colCount + 1).fill(0);
+  const p = new Array(colCount + 1).fill(0);
+  const way = new Array(colCount + 1).fill(0);
+
+  for (let i = 1; i <= rowCount; i += 1) {
+    p[0] = i;
+    let j0 = 0;
+    const minv = new Array(colCount + 1).fill(Number.POSITIVE_INFINITY);
+    const used = new Array(colCount + 1).fill(false);
+
+    do {
+      used[j0] = true;
+      const i0 = p[j0];
+      let delta = Number.POSITIVE_INFINITY;
+      let j1 = 0;
+
+      for (let j = 1; j <= colCount; j += 1) {
+        if (used[j]) {
+          continue;
+        }
+        const cur = cost[i0 - 1][j - 1] - u[i0] - v[j];
+        if (cur < minv[j]) {
+          minv[j] = cur;
+          way[j] = j0;
+        }
+        if (minv[j] < delta) {
+          delta = minv[j];
+          j1 = j;
+        }
+      }
+
+      for (let j = 0; j <= colCount; j += 1) {
+        if (used[j]) {
+          u[p[j]] += delta;
+          v[j] -= delta;
+        } else {
+          minv[j] -= delta;
+        }
+      }
+
+      j0 = j1;
+    } while (p[j0] !== 0);
+
+    do {
+      const j1 = way[j0];
+      p[j0] = p[j1];
+      j0 = j1;
+    } while (j0 !== 0);
+  }
+
+  const assignment = new Array(rowCount).fill(-1);
+  for (let j = 1; j <= colCount; j += 1) {
+    if (p[j] > 0) {
+      assignment[p[j] - 1] = j - 1;
+    }
+  }
+  return assignment;
+}
+
+function buildProjectTrendSeries(
+  projects,
+  lineRows,
+  authors,
+  fallbackStrokes = PROJECT_LINE_FALLBACK_STROKES_LIGHT
+) {
+  const rowByProjectId = new Map(lineRows.map((row) => [row.projectId, row]));
+  if (projects.length === 0) {
+    return [];
+  }
+
+  if (authors.length === 0) {
+    return projects.map((project, index) => ({
+      id: project.id,
+      label: project.label,
+      key: `project_line_${index}`,
+      stroke: fallbackStrokes[index % fallbackStrokes.length],
+    }));
+  }
+
+  const columnCount = Math.max(authors.length, projects.length);
+  const projectPriorityScores = new Array(projects.length).fill(1);
+  projects
+    .map((project, projectIndex) => ({
+      projectIndex,
+      totalLines: Math.max(0, Number(rowByProjectId.get(project.id)?.total) || 0),
+    }))
+    .sort((a, b) => (
+      b.totalLines - a.totalLines
+      || a.projectIndex - b.projectIndex
+    ))
+    .forEach((item, rankIndex) => {
+      projectPriorityScores[item.projectIndex] = projects.length - rankIndex;
+    });
+
+  const authorPreferenceScoresByProjectIndex = projects.map((project) => {
+    const row = rowByProjectId.get(project.id);
+    const preferenceScores = new Array(authors.length).fill(0);
+    authors
+      .map((author, authorIndex) => ({
+        authorIndex,
+        lineCount: Math.max(0, Number(row?.[author.key]) || 0),
+      }))
+      .sort((a, b) => (
+        b.lineCount - a.lineCount
+        || a.authorIndex - b.authorIndex
+      ))
+      .forEach((item, rankIndex) => {
+        preferenceScores[item.authorIndex] = authors.length - rankIndex;
+      });
+    return preferenceScores;
+  });
+
+  const maxTieBonus = projectPriorityScores.reduce(
+    (sum, priorityScore) => sum + priorityScore * authors.length,
+    0
+  );
+  const baseMultiplier = maxTieBonus + 1;
+
+  const weightMatrix = projects.map((project, projectIndex) => {
+    const row = rowByProjectId.get(project.id);
+    const weights = authors.map((author, authorIndex) => {
+      const rawWeight = Math.max(0, Number(row?.[author.key]) || 0);
+      const tieBonus = projectPriorityScores[projectIndex]
+        * (authorPreferenceScoresByProjectIndex[projectIndex][authorIndex] || 0);
+      return rawWeight * baseMultiplier + tieBonus;
+    });
+    while (weights.length < columnCount) {
+      weights.push(0);
+    }
+    return weights;
+  });
+  const assignment = solveMaxWeightAssignment(weightMatrix);
+
+  return projects.map((project, index) => {
+    const assignedColumn = assignment[index];
+    const selectedAuthor = assignedColumn >= 0 && assignedColumn < authors.length
+      ? authors[assignedColumn]
+      : null;
+    const stroke = selectedAuthor?.color
+      ?? fallbackStrokes[index % fallbackStrokes.length];
+
+    return {
+      id: project.id,
+      label: project.label,
+      key: `project_line_${index}`,
+      stroke,
+    };
+  });
+}
+
+function buildAuthorTrendSeries(authors) {
+  return authors.map((author) => ({
+    id: author.id,
+    label: author.displayName,
+    key: author.key,
+    stroke: author.color,
+  }));
+}
+
+function buildAuthorTrendRows(
+  nodes,
+  authorSeries,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  const totalsByAuthorKey = Object.fromEntries(authorSeries.map((line) => [line.key, 0]));
+  return nodes.map((node, index) => {
+    const delta = excludedCommitIds?.has(node.id)
+      ? 0
+      : trendDelta(node, metric, subtractDeletions);
+    if (node.authorKey && Object.prototype.hasOwnProperty.call(totalsByAuthorKey, node.authorKey)) {
+      totalsByAuthorKey[node.authorKey] += delta;
+    }
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+    };
+
+    for (const authorLine of authorSeries) {
+      row[authorLine.key] = Number(totalsByAuthorKey[authorLine.key]) || 0;
+    }
+
+    return row;
+  });
+}
+
+function buildPercentTrendRows(
+  nodes,
+  projects,
+  authors,
+  projectSeries,
+  authorSeries,
+  trendScope,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null
+) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return [];
+  }
+
+  const totalsByProjectId = new Map();
+  for (const project of projects) {
+    const authorTotals = {};
+    for (const author of authors) {
+      authorTotals[author.key] = 0;
+    }
+    totalsByProjectId.set(project.id, authorTotals);
+  }
+
+  return nodes.map((node, index) => {
+    if (!excludedCommitIds?.has(node.id)) {
+      const delta = trendDelta(node, metric, subtractDeletions);
+      const authorTotals = totalsByProjectId.get(node.projectId);
+      if (
+        authorTotals
+        && node.authorKey
+        && Object.prototype.hasOwnProperty.call(authorTotals, node.authorKey)
+      ) {
+        authorTotals[node.authorKey] += delta;
+      }
+    }
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+    };
+
+    if (trendScope === 'byProject') {
+      const netByProjectId = new Map();
+      let allProjectMagnitudeTotal = 0;
+
+      for (const project of projects) {
+        const authorTotals = totalsByProjectId.get(project.id);
+        const projectNetTotal = authors.reduce((sum, author) => (
+          sum + (Number(authorTotals?.[author.key]) || 0)
+        ), 0);
+        netByProjectId.set(project.id, projectNetTotal);
+        allProjectMagnitudeTotal += Math.abs(projectNetTotal);
+      }
+
+      for (const series of projectSeries) {
+        const projectNetTotal = Number(netByProjectId.get(series.id)) || 0;
+        row[series.key] = allProjectMagnitudeTotal > 0
+          ? (projectNetTotal / allProjectMagnitudeTotal) * 100
+          : 0;
+      }
+      return row;
+    }
+
+    for (const authorLine of authorSeries) {
+      row[authorLine.key] = 0;
+    }
+
+    for (const project of projects) {
+      const authorTotals = totalsByProjectId.get(project.id);
+      const magnitudeTotal = authors.reduce((sum, author) => {
+        const value = Number(authorTotals?.[author.key]) || 0;
+        return sum + Math.abs(value);
+      }, 0);
+      if (magnitudeTotal <= 0) {
+        continue;
+      }
+
+      for (const authorLine of authorSeries) {
+        const value = Number(authorTotals?.[authorLine.key]) || 0;
+        row[authorLine.key] += (value / magnitudeTotal) * 100;
+      }
+    }
+
+    return row;
+  });
+}
+
+function buildStackValueBounds(rows, authors) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(authors) || authors.length === 0) {
+    return { min: 0, max: 0 };
+  }
+
+  let min = 0;
+  let max = 0;
+
+  for (const row of rows) {
+    let positiveTotal = 0;
+    let negativeTotal = 0;
+
+    for (const author of authors) {
+      const value = Number(row?.[author.key]) || 0;
+      if (value > 0) {
+        positiveTotal += value;
+      } else if (value < 0) {
+        negativeTotal += value;
+      }
+    }
+
+    if (positiveTotal > max) {
+      max = positiveTotal;
+    }
+    if (negativeTotal < min) {
+      min = negativeTotal;
+    }
+  }
+
+  return { min, max };
+}
+
+function findNearestNodeIndex(nodes, targetY) {
+  let nearestIndex = 0;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < nodes.length; index += 1) {
+    const distance = Math.abs((nodes[index]?.y ?? 0) - targetY);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+    }
+  }
+
+  return nearestIndex;
+}
+
+function buildTimelinePath(fromNode, toNode) {
+  if (fromNode.x === toNode.x) {
+    return `M ${fromNode.x} ${fromNode.y} L ${toNode.x} ${toNode.y}`;
+  }
+
+  const deltaY = toNode.y - fromNode.y;
+  const control1Y = fromNode.y + deltaY * 0.35;
+  const control2Y = toNode.y - deltaY * 0.35;
+
+  return [
+    `M ${fromNode.x} ${fromNode.y}`,
+    `C ${fromNode.x} ${control1Y}, ${toNode.x} ${control2Y}, ${toNode.x} ${toNode.y}`,
+  ].join(' ');
+}
+
+function scaleTimelineToViewport(timeline, viewportWidth) {
+  if (!timeline) {
+    return null;
+  }
+
+  const baseWidth = Number(timeline.width) || 0;
+  const targetWidth = Number(viewportWidth) || 0;
+
+  if (baseWidth <= 0 || targetWidth <= 0 || baseWidth <= targetWidth) {
+    return {
+      ...timeline,
+      laneLabelWidth: 176,
+      laneLabelHeight: 34,
+      laneLabelFontSize: 14,
+    };
+  }
+
+  const scaleX = targetWidth / baseWidth;
+  const clampedPillScale = Math.max(0.6, scaleX);
+  const clampedFontScale = Math.max(0.8, scaleX);
+  const laneLabelWidth = Math.max(102, Math.min(176, Math.round(176 * clampedPillScale)));
+  const laneLabelHeight = Math.max(28, Math.min(34, Math.round(34 * clampedPillScale)));
+  const laneLabelFontSize = Math.max(11, Math.min(14, 14 * clampedFontScale));
+
+  const scaledLanes = timeline.lanes.map((lane) => ({
+    ...lane,
+    x: (Number(lane?.x) || 0) * scaleX,
+  }));
+  const laneById = new Map(scaledLanes.map((lane) => [lane.id, lane]));
+
+  const scaledNodes = timeline.nodes.map((node) => ({
+    ...node,
+    x: (Number(node?.x) || 0) * scaleX,
+    lane: node.lane ? laneById.get(node.lane.id) ?? node.lane : node.lane,
+  }));
+  const nodeById = new Map(scaledNodes.map((node) => [node.id, node]));
+
+  const remapEdges = (edges = []) => edges.flatMap((edge) => {
+    const from = nodeById.get(edge?.from?.id);
+    const to = nodeById.get(edge?.to?.id);
+    if (!from || !to) {
+      return [];
+    }
+    return [{
+      ...edge,
+      from,
+      to,
+      path: buildTimelinePath(from, to),
+    }];
+  });
+
+  return {
+    ...timeline,
+    width: targetWidth,
+    lanes: scaledLanes,
+    nodes: scaledNodes,
+    projectEdges: remapEdges(timeline.projectEdges),
+    precedenceEdges: remapEdges(timeline.precedenceEdges),
+    authorEdges: remapEdges(timeline.authorEdges),
+    laneLabelWidth,
+    laneLabelHeight,
+    laneLabelFontSize,
+  };
+}
+
+export default function TeamReviewView({ colorScheme = 'light', onToggleColorScheme = () => {} }) {
+  const [payload, setPayload] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [fileListLoading, setFileListLoading] = useState(true);
+  const [refreshingFileList, setRefreshingFileList] = useState(false);
+  const [error, setError] = useState('');
+  const [logFiles, setLogFiles] = useState([]);
+  const [selectedLogFile, setSelectedLogFile] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [visibleNodeCount, setVisibleNodeCount] = useState(0);
+  const [focusLineY, setFocusLineY] = useState(0);
+  const [subtractDeletions, setSubtractDeletions] = useState(false);
+  const [showProjectPercent, setShowProjectPercent] = useState(false);
+  const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
+  const [topLongCommitPercentInput, setTopLongCommitPercentInput] = useState(
+    String(DEFAULT_TOP_LONG_COMMIT_PERCENT)
+  );
+  const [barChartMode, setBarChartMode] = useState('commits');
+  const [trendScope, setTrendScope] = useState('byProject');
+  const [identityRulesText, setIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [draftIdentityRulesText, setDraftIdentityRulesText] = useState(DEFAULT_IDENTITY_RULES_TEXT);
+  const [identityRuleFiles, setIdentityRuleFiles] = useState([]);
+  const [identityRuleFilesLoading, setIdentityRuleFilesLoading] = useState(true);
+  const [refreshingIdentityRuleFiles, setRefreshingIdentityRuleFiles] = useState(false);
+  const [selectedIdentityRuleFile, setSelectedIdentityRuleFile] = useState(null);
+  const [identityRuleFileLoading, setIdentityRuleFileLoading] = useState(false);
+  const [identityRuleFileError, setIdentityRuleFileError] = useState('');
+  const [isDataSourceModalOpen, setIsDataSourceModalOpen] = useState(false);
+  const [isIdentityModalOpen, setIsIdentityModalOpen] = useState(false);
+  const [timelineViewportWidth, setTimelineViewportWidth] = useState(0);
+  const timelineScrollRef = useRef(null);
+  const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
+  const isDarkMode = colorScheme === 'dark';
+  const actionButtonColor = isDarkMode ? 'gray' : 'dark';
+  const teamBattleUrl = resolveAppRouteUrl('team-battle');
+  const chartGridStroke = isDarkMode ? '#474b57' : '#d3d3d3';
+  const chartReferenceStroke = isDarkMode ? '#7e8694' : '#8f8f8f';
+  const projectLineFallbackStrokes = isDarkMode
+    ? PROJECT_LINE_FALLBACK_STROKES_DARK
+    : PROJECT_LINE_FALLBACK_STROKES_LIGHT;
+
+  const identityRules = useMemo(
+    () => parseIdentityRules(identityRulesText),
+    [identityRulesText]
+  );
+
+  const draftIdentityRules = useMemo(
+    () => parseIdentityRules(draftIdentityRulesText),
+    [draftIdentityRulesText]
+  );
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(IDENTITY_RULES_STORAGE_KEY, identityRulesText);
+  }, [identityRulesText]);
+
+  const loadLogFiles = useCallback(async ({ preserveSelection = true, manual = false } = {}) => {
+    if (manual) {
+      setRefreshingFileList(true);
+    } else {
+      setFileListLoading(true);
+    }
+
+    try {
+      let files = [];
+      if (IS_STATIC_BUILD) {
+        const manifest = await fetchStaticDataManifest();
+        files = normalizeFileEntries(manifest?.commitLogs, '.json');
+      } else {
+        const res = await fetch('/api/commit-logs');
+        if (!res.ok) {
+          throw new Error(`파일 목록 로드 실패: ${res.status}`);
+        }
+
+        const data = await res.json();
+        files = normalizeFileEntries(data?.files, '.json');
+      }
+
+      setLogFiles(files);
+
+      if (files.length === 0) {
+        setSelectedLogFile(null);
+        setPayload(null);
+        setError(
+          IS_STATIC_BUILD
+            ? '선택 가능한 JSON 파일이 없습니다. build 전에 `npm run prepare:data`를 실행하세요.'
+            : '선택 가능한 JSON 파일이 없습니다. commit_crawler/json을 확인하세요.'
+        );
+        return;
+      }
+
+      const requestedByUrl = readDataSourceFromUrl();
+      setSelectedLogFile((current) => {
+        if (preserveSelection && current && files.some((item) => item.name === current)) {
+          return current;
+        }
+        if (requestedByUrl && files.some((item) => item.name === requestedByUrl)) {
+          return requestedByUrl;
+        }
+        return files[0].name;
+      });
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (manual) {
+        setRefreshingFileList(false);
+      } else {
+        setFileListLoading(false);
+      }
+    }
+  }, []);
+
+  const loadIdentityRuleFiles = useCallback(async ({ preserveSelection = true, manual = false } = {}) => {
+    if (manual) {
+      setRefreshingIdentityRuleFiles(true);
+    } else {
+      setIdentityRuleFilesLoading(true);
+    }
+
+    try {
+      let files = [];
+      if (IS_STATIC_BUILD) {
+        const manifest = await fetchStaticDataManifest();
+        files = normalizeFileEntries(manifest?.identityRuleFiles, '.txt');
+      } else {
+        const res = await fetch('/api/identity-rule-files');
+        if (!res.ok) {
+          throw new Error(`규칙 파일 목록 로드 실패: ${res.status}`);
+        }
+        const data = await res.json();
+        files = normalizeFileEntries(data?.files, '.txt');
+      }
+
+      setIdentityRuleFiles(files);
+      setSelectedIdentityRuleFile((current) => {
+        if (preserveSelection && current && files.some((item) => item.name === current)) {
+          return current;
+        }
+        const defaultFile = files.find((item) => item.name === DEFAULT_IDENTITY_RULES_FILE);
+        if (defaultFile) {
+          return defaultFile.name;
+        }
+        return files[0]?.name ?? null;
+      });
+      if (files.length === 0) {
+        setIdentityRuleFileError(
+          IS_STATIC_BUILD
+            ? '선택 가능한 .txt 규칙 파일이 없습니다. build 전에 `npm run prepare:data`를 실행하세요.'
+            : 'interactive_app 디렉토리에 .txt 규칙 파일이 없습니다.'
+        );
+      } else {
+        setIdentityRuleFileError('');
+      }
+    } catch (err) {
+      setIdentityRuleFileError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (manual) {
+        setRefreshingIdentityRuleFiles(false);
+      } else {
+        setIdentityRuleFilesLoading(false);
+      }
+    }
+  }, []);
+
+  const loadIdentityRulesFromFile = useCallback(async (fileName) => {
+    if (!fileName) {
+      return;
+    }
+
+    try {
+      setIdentityRuleFileLoading(true);
+      let res;
+      if (IS_STATIC_BUILD) {
+        const matchedFile = identityRuleFiles.find((item) => item.name === fileName);
+        if (!matchedFile?.path) {
+          throw new Error('규칙 파일 경로를 찾지 못했습니다. `npm run prepare:data`를 다시 실행하세요.');
+        }
+        res = await fetch(resolveAppAssetUrl(matchedFile.path));
+      } else {
+        res = await fetch(`/api/identity-rule-file?file=${encodeURIComponent(fileName)}`);
+      }
+      if (!res.ok) {
+        throw new Error(`규칙 파일 로드 실패: ${res.status}`);
+      }
+      const text = await res.text();
+      setIdentityRulesText(text);
+      setDraftIdentityRulesText(text);
+      setIdentityRuleFileError('');
+    } catch (err) {
+      setIdentityRuleFileError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIdentityRuleFileLoading(false);
+    }
+  }, [identityRuleFiles]);
+
+  useEffect(() => {
+    loadLogFiles();
+  }, [loadLogFiles]);
+
+  useEffect(() => {
+    if (!selectedLogFile) {
+      return;
+    }
+    replaceDataSourceInUrl(selectedLogFile);
+  }, [selectedLogFile]);
+
+  useEffect(() => {
+    loadIdentityRuleFiles();
+  }, [loadIdentityRuleFiles]);
+
+  useEffect(() => {
+    if (!selectedIdentityRuleFile) {
+      return;
+    }
+    loadIdentityRulesFromFile(selectedIdentityRuleFile);
+  }, [selectedIdentityRuleFile, loadIdentityRulesFromFile]);
+
+  useEffect(() => {
+    if (!selectedLogFile) {
+      setLoading(false);
+      return;
+    }
+
+    let mounted = true;
+    async function load() {
+      try {
+        setLoading(true);
+        let res;
+        if (IS_STATIC_BUILD) {
+          const matchedFile = logFiles.find((item) => item.name === selectedLogFile);
+          if (!matchedFile?.path) {
+            throw new Error('선택한 JSON 파일 경로를 찾지 못했습니다. `npm run prepare:data`를 다시 실행하세요.');
+          }
+          res = await fetch(resolveAppAssetUrl(matchedFile.path));
+        } else {
+          res = await fetch(`/api/commit-log?file=${encodeURIComponent(selectedLogFile)}`);
+        }
+        if (!res.ok) {
+          throw new Error(`데이터 로드 실패: ${res.status}`);
+        }
+        const data = await res.json();
+        if (mounted) {
+          setPayload(data);
+          setError('');
+        }
+      } catch (err) {
+        if (mounted) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, [logFiles, selectedLogFile]);
+
+  const selectedLogFileMeta = useMemo(
+    () => logFiles.find((item) => item.name === selectedLogFile) ?? null,
+    [logFiles, selectedLogFile]
+  );
+
+  const logFileOptions = useMemo(
+    () => logFiles.map((item) => ({
+      value: item.name,
+      label: item.name,
+    })),
+    [logFiles]
+  );
+
+  const selectedIdentityRuleFileMeta = useMemo(
+    () => identityRuleFiles.find((item) => item.name === selectedIdentityRuleFile) ?? null,
+    [identityRuleFiles, selectedIdentityRuleFile]
+  );
+
+  const identityRuleFileOptions = useMemo(
+    () => identityRuleFiles.map((item) => ({
+      value: item.name,
+      label: item.name,
+    })),
+    [identityRuleFiles]
+  );
+
+  const prepared = useMemo(() => {
+    if (!payload) {
+      return null;
+    }
+    return processLogData(payload, {
+      identityPairs: identityRules.pairs,
+    });
+  }, [payload, identityRules]);
+
+  const selectedNode = useMemo(() => {
+    if (!prepared?.timeline?.nodes?.length) {
+      return null;
+    }
+
+    const fallbackIndex = Math.max(
+      0,
+      Math.min(prepared.timeline.nodes.length - 1, visibleNodeCount - 1)
+    );
+
+    return (
+      prepared.timeline.nodes.find((node) => node.id === selectedId) ??
+      prepared.timeline.nodes[fallbackIndex]
+    );
+  }, [prepared, selectedId, visibleNodeCount]);
+  const commitRows = prepared?.commitRows ?? [];
+  const lineRows = prepared?.lineRows ?? [];
+  const projects = prepared?.projects ?? [];
+  const authors = prepared?.authors ?? [];
+  const authorByKey = prepared?.authorByKey ?? {};
+  const timeline = prepared?.timeline;
+  const applyTopLongCommitFilter = excludeTopLongCommits;
+  const applyZeroLengthCommitFilter = barChartMode === 'commits' && subtractDeletions;
+  const topLongCommitPercent = useMemo(() => {
+    if (topLongCommitPercentInput === '') {
+      return 0;
+    }
+    const parsed = Number(topLongCommitPercentInput);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, parsed));
+  }, [topLongCommitPercentInput]);
+
+  const topLongestCommitIds = useMemo(
+    () => buildTopLongestCommitIdSet(timeline?.nodes ?? [], topLongCommitPercent / 100),
+    [timeline, topLongCommitPercent]
+  );
+
+  const zeroLengthCommitIds = useMemo(
+    () => buildZeroLengthCommitIdSet(timeline?.nodes ?? []),
+    [timeline]
+  );
+
+  const activeExcludedCommitIds = useMemo(() => {
+    if (!applyTopLongCommitFilter && !applyZeroLengthCommitFilter) {
+      return null;
+    }
+
+    const excluded = new Set();
+    if (applyTopLongCommitFilter) {
+      for (const id of topLongestCommitIds) {
+        excluded.add(id);
+      }
+    }
+    if (applyZeroLengthCommitFilter) {
+      for (const id of zeroLengthCommitIds) {
+        excluded.add(id);
+      }
+    }
+    return excluded;
+  }, [
+    applyTopLongCommitFilter,
+    applyZeroLengthCommitFilter,
+    topLongestCommitIds,
+    zeroLengthCommitIds,
+  ]);
+
+  const applySelection = useCallback((nodes, selectedIndex) => {
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      setVisibleNodeCount(0);
+      setFocusLineY(0);
+      setSelectedId(null);
+      return;
+    }
+
+    const clampedIndex = Math.max(0, Math.min(nodes.length - 1, selectedIndex));
+    const selectedNode = nodes[clampedIndex];
+    const nextCount = clampedIndex + 1;
+
+    setVisibleNodeCount((prev) => (prev === nextCount ? prev : nextCount));
+    setFocusLineY((prev) => (prev === selectedNode.y ? prev : selectedNode.y));
+    setSelectedId((prev) => (prev === selectedNode.id ? prev : selectedNode.id));
+  }, []);
+
+  useEffect(() => {
+    if (!timeline?.nodes?.length) {
+      applySelection([], 0);
+      return;
+    }
+
+    const scrollElement = timelineScrollRef.current;
+    if (!scrollElement) {
+      applySelection(timeline.nodes, timeline.nodes.length - 1);
+      return;
+    }
+
+    let frameId = 0;
+    let ticking = false;
+
+    const updateVisibleCount = () => {
+      const maxScrollTop = Math.max(1, scrollElement.scrollHeight - scrollElement.clientHeight);
+      const progress = Math.min(1, Math.max(0, scrollElement.scrollTop / maxScrollTop));
+      const targetY = scrollElement.scrollTop + scrollElement.clientHeight * progress;
+      const selectedIndex = findNearestNodeIndex(timeline.nodes, targetY);
+      applySelection(timeline.nodes, selectedIndex);
+    };
+
+    const scheduleUpdate = () => {
+      if (ticking) {
+        return;
+      }
+      ticking = true;
+      frameId = window.requestAnimationFrame(() => {
+        ticking = false;
+        updateVisibleCount();
+      });
+    };
+
+    // Start at the latest commit by default when a timeline is loaded.
+    scrollElement.scrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+    applySelection(timeline.nodes, timeline.nodes.length - 1);
+
+    scrollElement.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+
+    return () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      scrollElement.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+    };
+  }, [applySelection, timeline]);
+
+  const cumulativeRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return buildCumulativeRows(
+        projects,
+        authors,
+        [],
+        subtractDeletions,
+        activeExcludedCommitIds
+      );
+    }
+    const clampedCount = Math.max(0, Math.min(visibleNodeCount, timeline.nodes.length));
+    return buildCumulativeRows(
+      projects,
+      authors,
+      timeline.nodes.slice(0, clampedCount),
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [authors, projects, timeline, visibleNodeCount, subtractDeletions, activeExcludedCommitIds]);
+
+  const commitAxisMax = useMemo(
+    () => Math.max(1, ...commitRows.map((row) => Number(row.total) || 0)),
+    [commitRows]
+  );
+
+  const fullLineRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return buildCumulativeRows(
+        projects,
+        authors,
+        [],
+        subtractDeletions,
+        activeExcludedCommitIds
+      ).lineRows;
+    }
+    return buildCumulativeRows(
+      projects,
+      authors,
+      timeline.nodes,
+      subtractDeletions,
+      activeExcludedCommitIds
+    ).lineRows;
+  }, [authors, projects, timeline, subtractDeletions, activeExcludedCommitIds]);
+
+  const lineAxisDomain = useMemo(() => {
+    if (!subtractDeletions) {
+      const max = Math.max(1, ...fullLineRows.map((row) => Number(row.total) || 0));
+      return [0, max];
+    }
+
+    const { min, max } = buildStackValueBounds(fullLineRows, authors);
+
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+    return [min, max];
+  }, [fullLineRows, subtractDeletions, authors]);
+
+  const linePercentRows = useMemo(() => {
+    const baseRows = cumulativeRows.lineRows ?? [];
+
+    return baseRows.map((row) => {
+      const magnitudeTotal = authors.reduce((sum, author) => {
+        const value = Number(row[author.key]) || 0;
+        return sum + Math.abs(value);
+      }, 0);
+
+      if (!Number.isFinite(magnitudeTotal) || magnitudeTotal <= 0) {
+        const emptyRow = {
+          projectId: row.projectId,
+          projectLabel: row.projectLabel,
+          total: 0,
+        };
+        for (const author of authors) {
+          emptyRow[author.key] = 0;
+        }
+        return emptyRow;
+      }
+
+      const nextRow = {
+        projectId: row.projectId,
+        projectLabel: row.projectLabel,
+        total: 100,
+      };
+
+      for (const author of authors) {
+        const value = Number(row[author.key]) || 0;
+        nextRow[author.key] = (value / magnitudeTotal) * 100;
+      }
+      return nextRow;
+    });
+  }, [cumulativeRows.lineRows, authors]);
+
+  const linePercentAxisDomain = useMemo(() => {
+    const { min, max } = buildStackValueBounds(linePercentRows, authors);
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+    return [min, max];
+  }, [linePercentRows, authors]);
+
+  const commitPercentRows = useMemo(() => {
+    const baseRows = cumulativeRows.commitRows ?? [];
+
+    return baseRows.map((row) => {
+      const commitTotal = Number(row.total) || 0;
+      if (!Number.isFinite(commitTotal) || commitTotal <= 0) {
+        const emptyRow = {
+          projectId: row.projectId,
+          projectLabel: row.projectLabel,
+          total: 0,
+        };
+        for (const author of authors) {
+          emptyRow[author.key] = 0;
+        }
+        return emptyRow;
+      }
+
+      const nextRow = {
+        projectId: row.projectId,
+        projectLabel: row.projectLabel,
+        total: 100,
+      };
+      for (const author of authors) {
+        const value = Number(row[author.key]) || 0;
+        nextRow[author.key] = (value / commitTotal) * 100;
+      }
+      return nextRow;
+    });
+  }, [cumulativeRows.commitRows, authors]);
+
+  const projectTrendSeries = useMemo(
+    () => buildProjectTrendSeries(projects, lineRows, authors, projectLineFallbackStrokes),
+    [projects, lineRows, authors, projectLineFallbackStrokes]
+  );
+
+  const projectTrendRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return [];
+    }
+    return buildProjectTrendRows(
+      timeline.nodes,
+      projectTrendSeries,
+      trendMetric,
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [timeline, projectTrendSeries, trendMetric, subtractDeletions, activeExcludedCommitIds]);
+
+  const authorTrendSeries = useMemo(
+    () => buildAuthorTrendSeries(authors),
+    [authors]
+  );
+
+  const authorTrendRows = useMemo(() => {
+    if (!timeline?.nodes?.length) {
+      return [];
+    }
+    return buildAuthorTrendRows(
+      timeline.nodes,
+      authorTrendSeries,
+      trendMetric,
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [timeline, authorTrendSeries, trendMetric, subtractDeletions, activeExcludedCommitIds]);
+
+  const trendPercentRows = useMemo(() => {
+    if (!showProjectPercent || !timeline?.nodes?.length) {
+      return [];
+    }
+    return buildPercentTrendRows(
+      timeline.nodes,
+      projects,
+      authors,
+      projectTrendSeries,
+      authorTrendSeries,
+      trendScope,
+      trendMetric,
+      subtractDeletions,
+      activeExcludedCommitIds
+    );
+  }, [
+    showProjectPercent,
+    timeline,
+    projects,
+    authors,
+    projectTrendSeries,
+    authorTrendSeries,
+    trendScope,
+    trendMetric,
+    subtractDeletions,
+    activeExcludedCommitIds,
+  ]);
+
+  const rawTrendRows = trendScope === 'byProject' ? projectTrendRows : authorTrendRows;
+  const activeTrendRows = showProjectPercent ? trendPercentRows : rawTrendRows;
+  const activeTrendSeries = trendScope === 'byProject' ? projectTrendSeries : authorTrendSeries;
+
+  const trendDomain = useMemo(() => {
+    if (showProjectPercent) {
+      if (activeTrendRows.length === 0) {
+        return [-100, 100];
+      }
+
+      const values = activeTrendRows.flatMap((row) =>
+        activeTrendSeries.map((line) => Number(row[line.key]) || 0)
+      );
+      const min = Math.min(0, ...values);
+      const max = Math.max(0, ...values);
+      if (min === max) {
+        return [min - 1, max + 1];
+      }
+      return [min, max];
+    }
+
+    if (activeTrendRows.length === 0) {
+      return [0, 1];
+    }
+
+    const values = activeTrendRows.flatMap((row) =>
+      activeTrendSeries.map((line) => Number(row[line.key]) || 0)
+    );
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    if (min === max) {
+      return [min - 1, max + 1];
+    }
+    return [min, max];
+  }, [showProjectPercent, trendScope, activeTrendRows, activeTrendSeries]);
+
+  const selectedTrendPoint = useMemo(() => {
+    if (activeTrendRows.length === 0) {
+      return null;
+    }
+    const index = Math.max(0, Math.min(activeTrendRows.length - 1, visibleNodeCount - 1));
+    return activeTrendRows[index];
+  }, [activeTrendRows, visibleNodeCount]);
+
+  const isCommitPercentMode = barChartMode === 'commits' && showProjectPercent;
+  const activeStackRows = barChartMode === 'commits'
+    ? (isCommitPercentMode ? commitPercentRows : cumulativeRows.commitRows)
+    : (showProjectPercent ? linePercentRows : cumulativeRows.lineRows);
+  const isLinePercentMode = barChartMode === 'lines' && showProjectPercent;
+  const isPercentMode = isCommitPercentMode || isLinePercentMode;
+  const activeStackUnit = barChartMode === 'commits'
+    ? (isCommitPercentMode ? '%' : 'commit')
+    : (isLinePercentMode ? '%' : (subtractDeletions ? 'net line' : 'line'));
+  const activeStackTitle = barChartMode === 'commits'
+    ? '커밋 수 (프로젝트 x 작성자)'
+    : '라인 수 (프로젝트 x 작성자)';
+  const activeStackDescription = barChartMode === 'commits'
+    ? (isCommitPercentMode
+      ? '타임라인 스크롤 위치까지의 누적 커밋 비율입니다.'
+      : '타임라인 스크롤 위치까지의 누적 커밋 수입니다.')
+    : '타임라인 스크롤 위치까지의 누적 `+`/`-` diff 라인입니다.';
+  const activeStackDomain = barChartMode === 'commits'
+    ? (isCommitPercentMode ? [0, 100] : [0, commitAxisMax])
+    : (isLinePercentMode ? linePercentAxisDomain : lineAxisDomain);
+  const activeStackValueFormatter = isPercentMode
+    ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+    : formatNumber;
+  const trendUnitLabel = showProjectPercent
+    ? (trendScope === 'byProject' ? '기여도(%)' : '기여도 합산(%)')
+    : (trendMetric === 'commits'
+      ? '커밋 수'
+      : (subtractDeletions ? '라인 수(추가-삭제)' : '라인 수(추가+삭제)'));
+  const trendDescription = showProjectPercent
+    ? (trendScope === 'byProject'
+      ? '시간에 따른 레포별 기여도 비율(부호 포함 %)입니다.'
+      : '시간에 따른 사용자별 기여도 합산 비율(부호 포함, 레포별 비율 합)입니다.')
+    : (trendScope === 'byProject'
+      ? `시간에 따른 레포별 누적 ${trendUnitLabel}입니다.`
+      : `시간에 따른 사용자별 누적 ${trendUnitLabel}입니다.`);
+
+  const ignoredRuleCount = identityRules.invalidLines.length;
+  const ignoredDraftRuleCount = draftIdentityRules.invalidLines.length;
+
+  const responsiveTimeline = useMemo(
+    () => scaleTimelineToViewport(timeline, timelineViewportWidth),
+    [timeline, timelineViewportWidth]
+  );
+
+  useEffect(() => {
+    const scrollElement = timelineScrollRef.current;
+    if (!scrollElement || typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const updateWidth = () => {
+      const nextWidth = Math.max(0, Math.floor(scrollElement.clientWidth));
+      setTimelineViewportWidth((prev) => (prev === nextWidth ? prev : nextWidth));
+    };
+
+    updateWidth();
+
+    let observer;
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateWidth);
+      observer.observe(scrollElement);
+    }
+    window.addEventListener('resize', updateWidth);
+
+    return () => {
+      if (observer) {
+        observer.disconnect();
+      }
+      window.removeEventListener('resize', updateWidth);
+    };
+  }, [timeline]);
+
+  if (loading || fileListLoading) {
+    return (
+      <div className="center-screen">
+        <Loader color={actionButtonColor} size="lg" />
+        <Text size="sm" c="dimmed">커밋 데이터를 불러오는 중...</Text>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="center-screen">
+        <Alert
+          variant="light"
+          color="gray"
+          title="오류"
+          icon={<IconAlertCircle size={16} />}
+        >
+          {error}
+        </Alert>
+      </div>
+    );
+  }
+
+  if (!prepared || !timeline) {
+    return null;
+  }
+
+  const laneLabelWidth = responsiveTimeline?.laneLabelWidth ?? 176;
+  const laneLabelHeight = responsiveTimeline?.laneLabelHeight ?? 34;
+  const laneLabelFontSize = responsiveTimeline?.laneLabelFontSize ?? 14;
+  const laneLabelY = 18 + laneLabelHeight / 2 + laneLabelFontSize * 0.35;
+
+  return (
+    <main className="app-shell">
+      <section className="left-pane">
+        <div className="pane-scroll">
+          <Card className="chart-card card-enter delay-2" radius="xl" p="lg" withBorder>
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Stack gap="xs" className="stack-chart-copy">
+                <Title order={4}>{activeStackTitle}</Title>
+                <Text size="sm" c="dimmed" className="stack-chart-description">
+                  {activeStackDescription}
+                </Text>
+              </Stack>
+              <Group gap="xs">
+                <SegmentedControl
+                  className="ios-segmented"
+                  size="xs"
+                  radius="xl"
+                  value={barChartMode}
+                  onChange={(value) => setBarChartMode(value === 'lines' ? 'lines' : 'commits')}
+                  data={[
+                    { value: 'commits', label: '커밋 수' },
+                    { value: 'lines', label: '라인 수' },
+                  ]}
+                />
+              </Group>
+            </Group>
+            <div className="stack-chart-option-slot">
+              <Group gap="xs" wrap="nowrap" className="stack-chart-option-group">
+                <Checkbox
+                  size="sm"
+                  color={actionButtonColor}
+                  radius={0}
+                  checked={showProjectPercent}
+                  onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
+                  label="레포 기여율(%)"
+                />
+                <Group gap={6} wrap="nowrap">
+                  <Checkbox
+                    size="sm"
+                    color={actionButtonColor}
+                    radius={0}
+                    checked={excludeTopLongCommits}
+                    onChange={(event) => setExcludeTopLongCommits(event.currentTarget.checked)}
+                    label="긴 커밋 제외(상위"
+                  />
+                  <NumberInput
+                    size="xs"
+                    w={52}
+                    min={0}
+                    max={100}
+                    step={1}
+                    hideControls
+                    placeholder="0"
+                    value={topLongCommitPercentInput}
+                    onChange={setTopLongCommitPercentInput}
+                    styles={{
+                      input: {
+                        height: 24,
+                        minHeight: 24,
+                        paddingTop: 0,
+                        paddingBottom: 0,
+                        textAlign: 'center',
+                      },
+                    }}
+                  />
+                  <Text size="sm">%)</Text>
+                </Group>
+                <Checkbox
+                  size="sm"
+                  color={actionButtonColor}
+                  radius={0}
+                  checked={subtractDeletions}
+                  onChange={(event) => setSubtractDeletions(event.currentTarget.checked)}
+                  label={barChartMode === 'commits' ? '0줄 변경 커밋 제외' : '순변경으로 계산(+/-)'}
+                />
+              </Group>
+            </div>
+            <div className="chart-wrap">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={activeStackRows}
+                  stackOffset="sign"
+                  margin={{ top: 20, right: 10, left: 0, bottom: 10 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                  <XAxis dataKey="projectLabel" />
+                  <YAxis
+                    allowDecimals={isPercentMode}
+                    domain={activeStackDomain}
+                    tickFormatter={isPercentMode ? (value) => `${Math.round(Number(value) || 0)}%` : undefined}
+                  />
+                  {barChartMode === 'lines' && subtractDeletions && (
+                    <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                  )}
+                  <Tooltip
+                    content={
+                      <StackedTooltip
+                        authorByKey={authorByKey}
+                        unitLabel={activeStackUnit}
+                        valueFormatter={activeStackValueFormatter}
+                      />
+                    }
+                  />
+                  {authors.map((author) => (
+                    <Bar
+                      key={author.key}
+                      dataKey={author.key}
+                      stackId={barChartMode}
+                      fill={author.color}
+                    >
+                      {activeStackRows.map((row, index) => {
+                        return (
+                          <Cell
+                            key={`${author.key}-${row?.projectId ?? row?.projectLabel ?? index}`}
+                            radius={[4, 4, 4, 4]}
+                          />
+                        );
+                      })}
+                    </Bar>
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card className="chart-card card-enter delay-3" radius="xl" p="lg" withBorder>
+            <Group justify="space-between" align="flex-start" wrap="wrap">
+              <Stack gap="xs">
+                <Title order={4}>시간 추이</Title>
+                <Text size="sm" c="dimmed">
+                  {trendDescription}
+                </Text>
+              </Stack>
+              <Stack gap="xs" align="flex-end">
+                <Group gap="xs">
+                  <SegmentedControl
+                    className="ios-segmented"
+                    size="xs"
+                    radius="xl"
+                    value={trendScope}
+                    onChange={(value) => setTrendScope(value === 'byAuthor' ? 'byAuthor' : 'byProject')}
+                    data={[
+                      { value: 'byProject', label: '레포별' },
+                      { value: 'byAuthor', label: '사용자별' },
+                    ]}
+                  />
+                </Group>
+              </Stack>
+            </Group>
+            <div className="chart-wrap">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                  <XAxis
+                    dataKey="timestampMs"
+                    type="number"
+                    domain={['dataMin', 'dataMax']}
+                    tickFormatter={(value) => formatKoreanDateTime(value)}
+                    tickCount={6}
+                  />
+                  <YAxis
+                    allowDecimals={showProjectPercent}
+                    domain={trendDomain}
+                    tickFormatter={showProjectPercent
+                      ? (value) => `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                      : undefined}
+                  />
+                  {!showProjectPercent && trendMetric === 'code' && subtractDeletions && (
+                    <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                  )}
+                  {selectedTrendPoint && (
+                    <ReferenceLine x={selectedTrendPoint.timestampMs} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                  )}
+                  <Tooltip
+                    labelFormatter={(value) => formatKoreanDateTime(value)}
+                    formatter={(value, name) => {
+                      return [
+                        showProjectPercent
+                          ? `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+                          : formatNumber(value),
+                        name,
+                      ];
+                    }}
+                  />
+                  {activeTrendSeries.map((series) => (
+                    <Line
+                      key={series.key}
+                      type="stepAfter"
+                      name={series.label}
+                      dataKey={series.key}
+                      stroke={series.stroke}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+        </div>
+      </section>
+
+      <section className="right-pane">
+        <Paper className="timeline-card" radius="xl" p="lg" withBorder>
+          <div className="timeline-head">
+            <div>
+              <Title order={2}>Wackathon History Timeline</Title>
+              <Text c="dimmed" size="sm">
+                프로젝트 라인 3개 위에 시간 순 커밋을 배치하고, 선후/작성자 전환 관계를 함께 표시합니다.
+              </Text>
+            </div>
+            <Group gap="xs" align="center">
+              <Button
+                size="xs"
+                color={actionButtonColor}
+                variant="default"
+                component="a"
+                href={teamBattleUrl}
+              >
+                팀 배틀
+              </Button>
+              {ignoredRuleCount > 0 && (
+                <Badge color="gray" variant="light">무시된 규칙 {ignoredRuleCount}개</Badge>
+              )}
+              <Button
+                size="xs"
+                color={actionButtonColor}
+                variant="default"
+                onClick={onToggleColorScheme}
+                leftSection={isDarkMode ? <IconSun size={14} /> : <IconMoon size={14} />}
+              >
+                {isDarkMode ? '라이트 모드' : '다크 모드'}
+              </Button>
+              <Button
+                size="xs"
+                color={actionButtonColor}
+                variant="default"
+                onClick={() => setIsDataSourceModalOpen(true)}
+                title={selectedLogFile ?? '데이터 소스'}
+              >
+                {selectedLogFile ?? '데이터 소스'}
+              </Button>
+              <Button
+                size="xs"
+                color={actionButtonColor}
+                variant="default"
+                onClick={() => {
+                  setDraftIdentityRulesText(identityRulesText);
+                  setIsIdentityModalOpen(true);
+                }}
+              >
+                작성자 병합 규칙
+              </Button>
+            </Group>
+          </div>
+
+          <Paper withBorder radius="md" p="sm" mb="sm" className="selected-commit-box">
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Selected Commit</Text>
+            <Text fw={700}>{selectedCommitText(selectedNode)}</Text>
+            {selectedNode && (
+              <Group gap="xs" mt={6}>
+                <Badge color="gray" variant="light">+{formatNumber(selectedNode.additions)}</Badge>
+                <Badge color="gray" variant="light">-{formatNumber(selectedNode.deletions)}</Badge>
+                <Badge
+                  variant="light"
+                  styles={{
+                    root: {
+                      backgroundColor: `${selectedNode.authorColor}26`,
+                      color: 'var(--text-main)',
+                      borderColor: `${selectedNode.authorColor}66`,
+                    },
+                  }}
+                >
+                  {selectedNode.authorName}
+                </Badge>
+              </Group>
+            )}
+          </Paper>
+
+          <div className="timeline-scroll" ref={timelineScrollRef}>
+            <svg
+              width={responsiveTimeline?.width ?? timeline.width}
+              height={responsiveTimeline?.height ?? timeline.height}
+              viewBox={`0 0 ${responsiveTimeline?.width ?? timeline.width} ${responsiveTimeline?.height ?? timeline.height}`}
+              className="timeline-canvas"
+              role="img"
+              aria-label="Commit timeline"
+            >
+              <defs>
+                <marker
+                  id="precedence-arrow"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="5"
+                  markerHeight="5"
+                  orient="auto"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b7b7b" opacity="0.6" />
+                </marker>
+              </defs>
+
+              {(responsiveTimeline?.lanes ?? timeline.lanes).map((lane) => (
+                <g key={lane.id}>
+                  <line
+                    x1={lane.x}
+                    y1={(responsiveTimeline?.topPadding ?? timeline.topPadding) - 30}
+                    x2={lane.x}
+                    y2={(responsiveTimeline?.height ?? timeline.height) - 32}
+                    className="timeline-lane-line"
+                  />
+                  <rect
+                    x={lane.x - laneLabelWidth / 2}
+                    y={18 + (34 - laneLabelHeight) / 2}
+                    width={laneLabelWidth}
+                    height={laneLabelHeight}
+                    rx={12}
+                    className="timeline-lane-pill"
+                  />
+                  <text
+                    x={lane.x}
+                    y={laneLabelY}
+                    textAnchor="middle"
+                    className="timeline-lane-label"
+                    style={{ fontSize: laneLabelFontSize }}
+                  >
+                    {lane.label}
+                  </text>
+                </g>
+              ))}
+
+              {(responsiveTimeline?.precedenceEdges ?? timeline.precedenceEdges).map((edge, index) => (
+                <path
+                  key={`precedence-${index}`}
+                  d={edge.path}
+                  className={buildEdgeClass('precedence')}
+                  markerEnd="url(#precedence-arrow)"
+                />
+              ))}
+
+              {(responsiveTimeline?.projectEdges ?? timeline.projectEdges).map((edge, index) => (
+                <path
+                  key={`project-${index}`}
+                  d={edge.path}
+                  className={buildEdgeClass('project')}
+                />
+              ))}
+
+              {(responsiveTimeline?.authorEdges ?? timeline.authorEdges).map((edge, index) => (
+                <path
+                  key={`author-${index}`}
+                  d={edge.path}
+                  className={buildEdgeClass('author')}
+                  style={{ stroke: edge.color }}
+                />
+              ))}
+
+              {selectedNode && focusLineY > 0 && (
+                <g className="timeline-focus-guide" style={{ pointerEvents: 'none' }}>
+                  <line
+                    x1={24}
+                    y1={focusLineY}
+                    x2={(responsiveTimeline?.width ?? timeline.width) - 24}
+                    y2={focusLineY}
+                    className="timeline-focus-line"
+                  />
+                </g>
+              )}
+
+              {(responsiveTimeline?.nodes ?? timeline.nodes).map((node, index) => {
+                const isSelected = selectedNode?.id === node.id;
+                return (
+                  <g
+                    key={node.id}
+                    onClick={() => applySelection(timeline.nodes, index)}
+                    className={`timeline-node ${isSelected ? 'is-selected' : ''}`}
+                  >
+                    <circle
+                      cx={node.x}
+                      cy={node.y}
+                      r={node.radius + 1.5}
+                      className="timeline-node-ring"
+                    />
+                    <circle
+                      cx={node.x}
+                      cy={node.y}
+                      r={node.radius}
+                      fill={node.authorColor}
+                      className="timeline-node-dot"
+                    />
+                    <title>
+                      {`${node.authorName}\n${node.lane?.label} · ${node.commitShortHash}\n${formatKoreanDateTime(node.timestampMs)}\n+${node.additions} / -${node.deletions}\n${node.title}`}
+                    </title>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+
+          <Paper withBorder radius="md" p="sm" mt="sm" className="legend-card">
+            <div className="author-legend">
+              {authors.map((author) => (
+                <Text
+                  key={`timeline-author-name-${author.key}`}
+                  size="sm"
+                  fw={700}
+                  className="author-name-item"
+                  style={{ color: author.color }}
+                >
+                  {author.displayName}
+                </Text>
+              ))}
+            </div>
+          </Paper>
+        </Paper>
+      </section>
+
+      <Modal
+        opened={isDataSourceModalOpen}
+        onClose={() => setIsDataSourceModalOpen(false)}
+        title="데이터 소스 선택"
+        centered
+        size="md"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            `commit_crawler/json`에 있는 결과 파일 중 하나를 선택합니다.
+          </Text>
+          <Select
+            label="JSON 파일"
+            data={logFileOptions}
+            value={selectedLogFile}
+            onChange={(value) => setSelectedLogFile(value)}
+            searchable={false}
+            allowDeselect={false}
+            nothingFoundMessage="선택 가능한 파일이 없습니다."
+          />
+          {selectedLogFileMeta && (
+            <Text size="xs" c="dimmed">
+              수정 시각: {formatKoreanDateTime(selectedLogFileMeta.modifiedAtMs)}
+            </Text>
+          )}
+          <Group justify="space-between">
+            <Button
+              variant="default"
+              color="gray"
+              onClick={() => loadLogFiles({ preserveSelection: true, manual: true })}
+              loading={refreshingFileList}
+            >
+              목록 새로고침
+            </Button>
+            <Button color={actionButtonColor} onClick={() => setIsDataSourceModalOpen(false)}>
+              닫기
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
+        opened={isIdentityModalOpen}
+        onClose={() => setIsIdentityModalOpen(false)}
+        title="작성자 병합 규칙 (1:1)"
+        centered
+        size="lg"
+      >
+        <Stack gap="sm">
+          <Text size="sm" c="dimmed">
+            `interactive_app` 디렉토리의 `.txt` 파일을 선택하면 규칙을 불러옵니다.
+            파일을 수정한 뒤 "파일 다시읽기"를 누르면 코드 수정 없이 반영됩니다.
+          </Text>
+          <Select
+            label="규칙 파일 (.txt)"
+            data={identityRuleFileOptions}
+            value={selectedIdentityRuleFile}
+            onChange={(value) => setSelectedIdentityRuleFile(value)}
+            searchable={false}
+            allowDeselect={false}
+            disabled={identityRuleFilesLoading}
+            nothingFoundMessage="선택 가능한 .txt 파일이 없습니다."
+          />
+          {selectedIdentityRuleFileMeta && (
+            <Text size="xs" c="dimmed">
+              수정 시각: {formatKoreanDateTime(selectedIdentityRuleFileMeta.modifiedAtMs)}
+            </Text>
+          )}
+          {identityRuleFileError && (
+            <Alert variant="light" color="gray" icon={<IconAlertCircle size={14} />}>
+              {identityRuleFileError}
+            </Alert>
+          )}
+          <Group gap="xs">
+            <Button
+              size="xs"
+              variant="default"
+              color="gray"
+              onClick={() => loadIdentityRuleFiles({ preserveSelection: true, manual: true })}
+              loading={refreshingIdentityRuleFiles}
+            >
+              파일 목록 새로고침
+            </Button>
+            <Button
+              size="xs"
+              variant="default"
+              color="gray"
+              onClick={() => loadIdentityRulesFromFile(selectedIdentityRuleFile)}
+              loading={identityRuleFileLoading}
+              disabled={!selectedIdentityRuleFile}
+            >
+              파일 다시읽기
+            </Button>
+          </Group>
+          <Text size="sm" c="dimmed">
+            한 줄에 한 쌍씩 사용하세요. 형식: 사용자A - 사용자B 또는 사용자A → 사용자B
+          </Text>
+          <Textarea
+            label="현재 적용 규칙 내용"
+            minRows={7}
+            autosize
+            value={draftIdentityRulesText}
+            onChange={(event) => setDraftIdentityRulesText(event.currentTarget.value)}
+            placeholder={'Seo Minseok - user983740\n사용자1 - 나도사용자1\n나도사용자1 - 나역시사용자1'}
+          />
+          {ignoredDraftRuleCount > 0 && (
+            <Text size="xs" c="dimmed">
+              형식이 맞지 않은 줄 {ignoredDraftRuleCount}개는 적용 시 무시됩니다.
+            </Text>
+          )}
+          <Group justify="space-between">
+            <Button
+              variant="subtle"
+              color="gray"
+              onClick={() => loadIdentityRulesFromFile(selectedIdentityRuleFile)}
+              disabled={!selectedIdentityRuleFile}
+            >
+              파일 내용으로 되돌리기
+            </Button>
+            <Group gap="xs">
+              <Button variant="default" onClick={() => setIsIdentityModalOpen(false)}>
+                취소
+              </Button>
+              <Button
+                color={actionButtonColor}
+                onClick={() => {
+                  setIdentityRulesText(draftIdentityRulesText);
+                  setIsIdentityModalOpen(false);
+                }}
+              >
+                적용
+              </Button>
+            </Group>
+          </Group>
+        </Stack>
+      </Modal>
+    </main>
+  );
+}

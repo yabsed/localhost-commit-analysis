@@ -82,6 +82,145 @@ body {
   padding: var(--app-pad);
 }
 
+.battle-shell {
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: var(--app-pad);
+}
+
+.battle-scroll {
+  height: 100%;
+  overflow: auto;
+  padding-right: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.battle-main-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.battle-control-group {
+  align-items: center;
+}
+
+.battle-metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.battle-option-slot {
+  min-height: 32px;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.battle-dial-panel {
+  margin-top: 8px;
+}
+
+.battle-chart-layout {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+}
+
+.battle-ranking-panel,
+.battle-rect-panel {
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.battle-ranking-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.battle-ranking-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.battle-ranking-item:last-child {
+  border-bottom: none;
+}
+
+.battle-ranking-order {
+  text-align: center;
+}
+
+.battle-ranking-main {
+  min-width: 0;
+}
+
+.battle-ranking-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.battle-team-bar-wrap {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.battle-team-line-wrap {
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+.battle-team-visual-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+}
+
+.battle-team-chart-block {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.battle-series-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.battle-series-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--surface-card);
+}
+
 .left-pane,
 .right-pane {
   min-height: 0;
@@ -150,6 +289,33 @@ body {
 
 .stack-chart-option-group .mantine-Checkbox-label {
   white-space: nowrap;
+}
+
+.ios-segmented {
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--lane-pill-fill);
+}
+
+.ios-segmented .mantine-SegmentedControl-indicator {
+  border-radius: 999px;
+  background: var(--surface-card);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
+.ios-segmented .mantine-SegmentedControl-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-soft);
+  line-height: 1.1;
+  min-width: 72px;
+  padding: 6px 12px;
+}
+
+.ios-segmented .mantine-SegmentedControl-input:checked + .mantine-SegmentedControl-label {
+  color: var(--text-main);
 }
 
 .chart-tooltip {
@@ -403,6 +569,15 @@ body {
     max-height: 65vh;
   }
 
+  .battle-chart-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .battle-ranking-panel,
+  .battle-rect-panel {
+    min-height: clamp(220px, 34vh, 280px);
+  }
+
 }
 
 @media (max-width: 780px) {
@@ -421,6 +596,10 @@ body {
 
   .edge-legend {
     justify-content: flex-start;
+  }
+
+  .battle-team-visual-layout {
+    grid-template-columns: 1fr;
   }
 }
 
