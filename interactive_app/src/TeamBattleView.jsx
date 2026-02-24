@@ -85,6 +85,13 @@ function resolveAppAssetUrl(relativePath) {
   return `${normalizedBase}${normalizedPath}`;
 }
 
+function resolveAppRouteUrl(relativePath = '') {
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const normalizedPath = String(relativePath || '').replace(/^\/+/, '');
+  return normalizedPath ? `${normalizedBase}${normalizedPath}` : normalizedBase;
+}
+
 async function fetchStaticDataManifest() {
   const res = await fetch(resolveAppAssetUrl(STATIC_DATA_MANIFEST_PATH));
   if (!res.ok) {
@@ -1016,6 +1023,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   );
 
   const actionButtonColor = colorScheme === 'dark' ? 'gray' : 'dark';
+  const teamReviewUrl = resolveAppRouteUrl('');
   const chartGridStroke = colorScheme === 'dark' ? 'rgba(181, 197, 227, 0.25)' : 'rgba(24, 24, 24, 0.14)';
   const chartReferenceStroke = colorScheme === 'dark' ? 'rgba(218, 228, 248, 0.6)' : 'rgba(24, 24, 24, 0.45)';
   const chartTickColor = colorScheme === 'dark' ? '#c0cbdf' : '#575757';
@@ -1793,6 +1801,18 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
               <Text size="sm" c="dimmed">{trendDescription}</Text>
             </Stack>
             <Group gap="xs" className="battle-control-group">
+              <Group gap={6} wrap="nowrap">
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant="default"
+                  component="a"
+                  href={teamReviewUrl}
+                >
+                  팀 리뷰
+                </Button>
+              </Group>
               <Group gap={6} wrap="nowrap">
                 <Text size="xs" c="dimmed" fw={700}>랭킹 기준</Text>
                 <Button

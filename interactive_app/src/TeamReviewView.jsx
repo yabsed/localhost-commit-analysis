@@ -57,6 +57,13 @@ function resolveAppAssetUrl(relativePath) {
   return `${normalizedBase}${normalizedPath}`;
 }
 
+function resolveAppRouteUrl(relativePath = '') {
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  const normalizedPath = String(relativePath || '').replace(/^\/+/, '');
+  return normalizedPath ? `${normalizedBase}${normalizedPath}` : normalizedBase;
+}
+
 async function fetchStaticDataManifest() {
   const res = await fetch(resolveAppAssetUrl(STATIC_DATA_MANIFEST_PATH));
   if (!res.ok) {
@@ -849,6 +856,7 @@ export default function TeamReviewView({ colorScheme = 'light', onToggleColorSch
   const trendMetric = barChartMode === 'commits' ? 'commits' : 'code';
   const isDarkMode = colorScheme === 'dark';
   const actionButtonColor = isDarkMode ? 'gray' : 'dark';
+  const teamBattleUrl = resolveAppRouteUrl('team-battle');
   const chartGridStroke = isDarkMode ? '#474b57' : '#d3d3d3';
   const chartReferenceStroke = isDarkMode ? '#7e8694' : '#8f8f8f';
   const projectLineFallbackStrokes = isDarkMode
@@ -1820,6 +1828,15 @@ export default function TeamReviewView({ colorScheme = 'light', onToggleColorSch
               </Text>
             </div>
             <Group gap="xs" align="center">
+              <Button
+                size="xs"
+                color={actionButtonColor}
+                variant="default"
+                component="a"
+                href={teamBattleUrl}
+              >
+                팀 배틀
+              </Button>
               {ignoredRuleCount > 0 && (
                 <Badge color="gray" variant="light">무시된 규칙 {ignoredRuleCount}개</Badge>
               )}
