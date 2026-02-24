@@ -11,6 +11,7 @@ import {
   NumberInput,
   Paper,
   Select,
+  SegmentedControl,
   Stack,
   Text,
   Textarea,
@@ -1615,24 +1616,17 @@ export default function TeamReviewView({ colorScheme = 'light', onToggleColorSch
                 </Text>
               </Stack>
               <Group gap="xs">
-                <Button
+                <SegmentedControl
+                  className="ios-segmented"
                   size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={barChartMode === 'commits' ? 'filled' : 'default'}
-                  onClick={() => setBarChartMode('commits')}
-                >
-                  커밋 수
-                </Button>
-                <Button
-                  size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={barChartMode === 'lines' ? 'filled' : 'default'}
-                  onClick={() => setBarChartMode('lines')}
-                >
-                  라인 수
-                </Button>
+                  radius="xl"
+                  value={barChartMode}
+                  onChange={(value) => setBarChartMode(value === 'lines' ? 'lines' : 'commits')}
+                  data={[
+                    { value: 'commits', label: '커밋 수' },
+                    { value: 'lines', label: '라인 수' },
+                  ]}
+                />
               </Group>
             </Group>
             <div className="stack-chart-option-slot">
@@ -1744,22 +1738,17 @@ export default function TeamReviewView({ colorScheme = 'light', onToggleColorSch
               </Stack>
               <Stack gap="xs" align="flex-end">
                 <Group gap="xs">
-                  <Button
+                  <SegmentedControl
+                    className="ios-segmented"
                     size="xs"
-                    color={actionButtonColor}
-                    variant={trendScope === 'byProject' ? 'filled' : 'default'}
-                    onClick={() => setTrendScope('byProject')}
-                  >
-                    레포별
-                  </Button>
-                  <Button
-                    size="xs"
-                    color={actionButtonColor}
-                    variant={trendScope === 'byAuthor' ? 'filled' : 'default'}
-                    onClick={() => setTrendScope('byAuthor')}
-                  >
-                    사용자별
-                  </Button>
+                    radius="xl"
+                    value={trendScope}
+                    onChange={(value) => setTrendScope(value === 'byAuthor' ? 'byAuthor' : 'byProject')}
+                    data={[
+                      { value: 'byProject', label: '레포별' },
+                      { value: 'byAuthor', label: '사용자별' },
+                    ]}
+                  />
                 </Group>
               </Stack>
             </Group>

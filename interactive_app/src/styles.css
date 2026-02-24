@@ -291,6 +291,33 @@ body {
   white-space: nowrap;
 }
 
+.ios-segmented {
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  padding: 2px;
+  background: var(--lane-pill-fill);
+}
+
+.ios-segmented .mantine-SegmentedControl-indicator {
+  border-radius: 999px;
+  background: var(--surface-card);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
+.ios-segmented .mantine-SegmentedControl-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-soft);
+  line-height: 1.1;
+  min-width: 72px;
+  padding: 6px 12px;
+}
+
+.ios-segmented .mantine-SegmentedControl-input:checked + .mantine-SegmentedControl-label {
+  color: var(--text-main);
+}
+
 .chart-tooltip {
   min-width: 160px;
 }

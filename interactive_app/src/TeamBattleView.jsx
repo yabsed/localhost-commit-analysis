@@ -11,13 +11,18 @@ import {
   NumberInput,
   Paper,
   Select,
+  SegmentedControl,
   Slider,
   Stack,
   Text,
   TextInput,
   Title,
 } from '@mantine/core';
-import { IconAlertCircle } from '@tabler/icons-react';
+import {
+  IconAlertCircle,
+  IconMoon,
+  IconSun,
+} from '@tabler/icons-react';
 import {
   Bar,
   BarChart,
@@ -980,7 +985,10 @@ function SeriesLegendBoxes({ series = [] }) {
   );
 }
 
-export default function TeamBattleView({ colorScheme = 'light' }) {
+export default function TeamBattleView({
+  colorScheme = 'light',
+  onToggleColorScheme = () => {},
+}) {
   const [teamPayloads, setTeamPayloads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fileListLoading, setFileListLoading] = useState(true);
@@ -1022,7 +1030,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [identityRulesText]
   );
 
-  const actionButtonColor = colorScheme === 'dark' ? 'gray' : 'dark';
+  const isDarkMode = colorScheme === 'dark';
+  const actionButtonColor = isDarkMode ? 'gray' : 'dark';
   const teamReviewUrl = resolveAppRouteUrl('');
   const chartGridStroke = colorScheme === 'dark' ? 'rgba(181, 197, 227, 0.25)' : 'rgba(24, 24, 24, 0.14)';
   const chartReferenceStroke = colorScheme === 'dark' ? 'rgba(218, 228, 248, 0.6)' : 'rgba(24, 24, 24, 0.45)';
@@ -1814,45 +1823,40 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                 </Button>
               </Group>
               <Group gap={6} wrap="nowrap">
-                <Text size="xs" c="dimmed" fw={700}>랭킹 기준</Text>
                 <Button
                   size="xs"
                   color={actionButtonColor}
                   radius={0}
-                  variant={entityMode === 'user' ? 'filled' : 'default'}
-                  onClick={() => setEntityMode('user')}
+                  variant="default"
+                  onClick={onToggleColorScheme}
+                  leftSection={isDarkMode ? <IconSun size={14} /> : <IconMoon size={14} />}
                 >
-                  사용자
+                  {isDarkMode ? '라이트 모드' : '다크 모드'}
                 </Button>
-                <Button
+                <SegmentedControl
+                  className="ios-segmented"
                   size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={entityMode === 'repo' ? 'filled' : 'default'}
-                  onClick={() => setEntityMode('repo')}
-                >
-                  레포
-                </Button>
+                  radius="xl"
+                  value={entityMode}
+                  onChange={(value) => setEntityMode(value === 'user' ? 'user' : 'repo')}
+                  data={[
+                    { value: 'user', label: '사용자' },
+                    { value: 'repo', label: '레포' },
+                  ]}
+                />
               </Group>
               <Group gap={6} wrap="nowrap">
-                <Button
+                <SegmentedControl
+                  className="ios-segmented"
                   size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={metricMode === 'commits' ? 'filled' : 'default'}
-                  onClick={() => setMetricMode('commits')}
-                >
-                  커밋 수
-                </Button>
-                <Button
-                  size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={metricMode === 'lines' ? 'filled' : 'default'}
-                  onClick={() => setMetricMode('lines')}
-                >
-                  라인 수
-                </Button>
+                  radius="xl"
+                  value={metricMode}
+                  onChange={(value) => setMetricMode(value === 'lines' ? 'lines' : 'commits')}
+                  data={[
+                    { value: 'commits', label: '커밋 수' },
+                    { value: 'lines', label: '라인 수' },
+                  ]}
+                />
               </Group>
               <Group gap={6} wrap="nowrap">
                 <Button
