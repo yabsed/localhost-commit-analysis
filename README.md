@@ -1,46 +1,52 @@
 # localhost-commit-analysis
 
-- **2026 와커톤**에 참가한 팀들의 개발 레포지토리를 분석하기 위해 만든 **커밋 분석 도구**입니다.
-- **팀의 협업 흐름**과 **기여 패턴**을 시간축에서 읽을 수 있도록 설계했습니다.
-
+2026 와커톤 참가팀의 Git 커밋 로그를 수집하고, 협업 흐름을 시각적으로 분석하는 프로젝트입니다.
 
 ![localhost-commit-analysis](./image.png)
+![localhost-commit-analysis-2](./imag2.png)
 
-## 프런트 배포 주소
+## 배포 주소
 
-### **https://yabsed.github.io/localhost-commit-analysis**
+https://yabsed.github.io/localhost-commit-analysis/
 
-- 앱: `interactive_app` (React + Vite + Recharts)
-- 데이터 수집/병합: `commit_crawler` (Python)
+## 핵심 모드
 
-## 배경
+### Team Review
 
+- 단일 JSON 데이터(`commit_crawler/json/*.json`)를 선택해 상세 분석
+- 타임라인: 커밋 시간순 배치 + 프로젝트 간 선후 관계 + 작성자 크로스 이동선
+- 누적 스택 차트:
+  - 커밋 수 / 라인 수 전환
+  - 레포 기여율(%) 모드
+  - 긴 커밋 상위 N% 제외
+  - 0줄 변경 커밋 제외(커밋 모드) / 순변경(+/-) 계산(라인 모드)
+- 시간 추이 차트:
+  - 레포별/사용자별 누적 추이
+  - 현재 타임라인 위치 기준 Reference 라인 표시
+- 작성자 병합 규칙(.txt) 파일 선택/재로딩/즉시 적용 지원
+- 데이터 소스 URL 고정: `?source=<파일명>.json`
 
-![2026 와커톤](./와커톤.png)
+### Team Battle
 
-- 분석 대상: 2026 와커톤 참가자/참가팀 개발 레포지토리
-- 목적: 커밋 히스토리를 기반으로 팀별 협업 방식, 작성자 전환, 코드 기여 흐름을 정량적으로 확인
-- 2026 와커톤 소개: https://jet-coral-9d0.notion.site/2026-2e770e37e9c7801e8994e43d9ae6a3cf
+- `commit_crawler/json/*.json` 파일들을 팀 단위로 동시 로드해 비교
+- 분석 시점 윈도우: `2026-02-21 15:00:00 +09:00` ~ `2026-02-22 09:00:00 +09:00`
+- 시점 다이얼(슬라이더/휠)로 특정 시점 랭킹과 그래프를 동기화
+- 옵션:
+  - 긴 커밋 상위 N% 제외
+  - 0줄 변경 커밋 제외(커밋 모드) / 순변경(+/-) 계산(라인 모드)
+  - 오후 3시 이전 준비 커밋 포함
+- 우측 그래프 모드:
+  - 사용자 순위(`+8`, `-8` 같은 토큰 입력으로 Top/Bottom 라인 선택)
+  - 팀별 순위(`+8`, `-8` 같은 토큰 입력으로 Top/Bottom 라인 선택)
+  - 레포 순위(`+8`, `-8` 같은 토큰 입력으로 Top/Bottom 라인 선택)
+  - 프런트 vs 백엔드 누적 추이(레포명 기준 분류)
+- 팀 제거 목록(특정 팀 제외) 지원
 
-## 주요 기능
+## 라우팅
 
-- Wackathon History Timeline
-  - 프로젝트 라인(예: Mobile/PC/Server) 위에 커밋을 시간순으로 배치
-  - 프로젝트 내부 연결, 프로젝트 간 선후 관계, 작성자 크로스 프로젝트 이동선을 함께 표시
-  - 커밋 선택 시 해시/시간/라인 변경량/작성자 정보 확인
-- 누적 스택 차트
-  - 프로젝트 x 작성자 기준으로 커밋 수 또는 라인 수 누적 비교
-  - 레포 기여율(%) 모드 지원
-  - 긴 커밋 상위 N% 제외, 0줄 변경 커밋 제외, 순변경(+/-) 계산 옵션
-- 시간 추이 차트
-  - 레포별/사용자별 누적 추이 확인
-  - 커밋 수 또는 코드 라인 기준 전환
-- 데이터 소스 전환
-  - `commit_crawler/json/*.json` 중 분석 파일 선택
-  - URL 쿼리 `?source=<파일명>.json` 로 특정 데이터 소스 고정 가능
-- 작성자 병합 규칙
-  - `interactive_app/*.txt` 규칙 파일을 불러와 동일 작성자(alias) 통합
-  - 예: `Seo Minseok - user983740`
+- `/` : Team Review
+- `/team-battle` 또는 `/battle` : Team Battle
+- 해시 라우팅도 지원 (`#/team-battle`, `#/battle`)
 
 ## 프로젝트 구조
 
@@ -51,62 +57,91 @@
 │  ├─ input.txt                        # 분석 대상 레포 목록
 │  ├─ workers/
 │  │  ├─ crawl_git_logs.py             # git log 수집
-│  │  └─ merge_git_logs_to_json.py     # 로그 병합(json 생성)
+│  │  └─ merge_git_logs_to_json.py     # 로그 병합(JSON 생성)
 │  └─ json/                            # 앱에서 읽는 분석 데이터(.json)
 ├─ interactive_app/
 │  ├─ src/                             # 시각화 앱 코드
-│  ├─ scripts/prepare-static-data.mjs  # Pages 배포용 정적 데이터 복사/manifest 생성
-│  ├─ author_identity_rules.txt        # 작성자 병합 규칙 기본 파일
+│  ├─ scripts/prepare-static-data.mjs  # 정적 배포용 데이터 복사 + manifest 생성
+│  ├─ author_identity_rules.txt        # 기본 작성자 병합 규칙 파일
+│  ├─ public/data/                     # prepare:data 결과물
 │  └─ package.json
 └─ .github/workflows/deploy-interactive-app.yml
 ```
 
 ## 요구 사항
 
-- Node.js 20 권장 (GitHub Actions 기준)
+- Node.js 20+
 - npm
 - Python 3.10+
 - Git CLI
 
-## 빠른 시작 (로컬 개발)
+## 빠른 시작 (로컬)
 
-1. 의존성 설치
+1. 커밋 데이터 생성/갱신
+
+```bash
+python3 commit_crawler/commit_crawler.py
+```
+
+2. 프런트 실행
 
 ```bash
 cd interactive_app
 npm ci
-```
-
-2. 개발 서버 실행
-
-```bash
 npm run dev
 ```
 
-개발 모드에서는 Vite 서버가 아래 API를 제공합니다.
+3. 접속
+
+- Team Review: `http://localhost:5173/`
+- Team Battle: `http://localhost:5173/team-battle`
+
+## 개발 서버 API (Vite 미들웨어)
 
 - `GET /api/commit-logs`
 - `GET /api/commit-log?file=<name>.json`
 - `GET /api/identity-rule-files`
 - `GET /api/identity-rule-file?file=<name>.txt`
 
-## 데이터 갱신 방법
+## commit_crawler 사용법
 
-1. 대상 레포 목록 수정: `commit_crawler/input.txt`
-2. 전체 파이프라인 실행:
+### 입력 파일 (`commit_crawler/input.txt`)
+
+한 줄에 하나씩 입력합니다.
+
+- `https://github.com/owner/repo.git`
+- `https://github.com/owner/repo`
+- `owner/repo` (자동으로 GitHub URL 변환)
+- `owner/repo -> backend` (source alias 지정)
+- 로컬 경로도 호환 지원
+
+### 주요 옵션
 
 ```bash
-python3 commit_crawler/commit_crawler.py
+python3 commit_crawler/commit_crawler.py \
+  --force \
+  --no-prune \
+  --disable-cutoff-filter
 ```
 
-### 컷오프 필터 주의
+- `--force`: 기존 `.txt`가 있어도 다시 수집
+- `--no-prune`: 현재 `input.txt`에 없는 오래된 로그 파일 자동 정리 비활성화
+- `--disable-cutoff-filter`: 병합 시 컷오프 필터 비활성화
 
-기본 설정은 `2026-02-22 09:00:00 +09:00` 이후 커밋을 병합 JSON에서 제외합니다.  
-필터를 끄려면:
+### 컷오프 필터 기본값
 
-```bash
-python3 commit_crawler/commit_crawler.py --disable-cutoff-filter
-```
+기본값은 `2026-02-22 09:00:00 +09:00` 이후 커밋을 병합 JSON에서 제외합니다.
+
+## 작성자 병합 규칙 형식
+
+`interactive_app/*.txt` 파일을 규칙 파일로 사용합니다.
+
+- `사용자A - 사용자B`
+- `사용자A -> 사용자B`
+- `사용자A,사용자B`
+- `사용자A<TAB>사용자B`
+
+주석(`#`)과 빈 줄은 무시됩니다. 형식 오류 줄은 경고 후 제외됩니다.
 
 ## 빌드/배포
 
@@ -117,10 +152,11 @@ cd interactive_app
 npm run build
 ```
 
-- `build` 시 `npm run prepare:data`가 먼저 실행되어:
-  - `commit_crawler/json/*.json` -> `interactive_app/public/data/commit-logs/`
-  - `interactive_app/*.txt` -> `interactive_app/public/data/identity-rules/`
-  - `interactive_app/public/data/manifest.json` 생성
+`npm run build`는 내부에서 `npm run prepare:data`를 먼저 실행합니다.
+
+- `commit_crawler/json/*.json` -> `interactive_app/public/data/commit-logs/`
+- `interactive_app/*.txt` -> `interactive_app/public/data/identity-rules/`
+- `interactive_app/public/data/manifest.json` 생성
 
 ### GitHub Pages 빌드
 
@@ -129,12 +165,11 @@ cd interactive_app
 npm run build:pages
 ```
 
-- Pages base 경로: `/localhost-commit-analysis/`
+- base path: `/localhost-commit-analysis/`
+- `dist/index.html`을 `dist/404.html`로 복사해 새로고침 라우팅 대응
 - 워크플로우: `.github/workflows/deploy-interactive-app.yml`
-- 트리거:
-  - `main` 브랜치에 push
-  - `interactive_app/**`, `commit_crawler/json/**`, 워크플로우 파일 변경 시
 
 ## 참고
 
-- `commit_crawler/README.md`에 수집 파이프라인 옵션이 더 자세히 정리되어 있습니다.
+- 와커톤 소개: https://jet-coral-9d0.notion.site/2026-2e770e37e9c7801e8994e43d9ae6a3cf
+- 크롤러 상세 설명: `commit_crawler/README.md`

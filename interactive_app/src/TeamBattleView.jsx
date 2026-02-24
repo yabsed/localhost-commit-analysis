@@ -80,9 +80,16 @@ const REPO_BATTLE_SERIES = [
 ];
 const DEFAULT_REPO_LINE_LIMIT = 8;
 const RIGHT_CHART_MODE_OPTIONS = [
-  { value: 'repo_rank', label: '레포 순위' },
+  { value: 'user_rank', label: '사용자 순위' },
+  { value: 'team_rank', label: '팀별 순위' },
+  { value: 'overall_rank', label: '레포 순위' },
   { value: 'repo_battle', label: '프런트 vs 백엔드' },
 ];
+const RIGHT_CHART_RANK_LABEL_BY_MODE = {
+  user_rank: '사용자 순위',
+  team_rank: '팀별 순위',
+  overall_rank: '레포 순위',
+};
 const DEFAULT_REMOVED_TEAM_IDS = [teamIdFromFileName('유자잼.json')];
 
 function resolveAppAssetUrl(relativePath) {
@@ -453,7 +460,7 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
     id: team.id,
     key: `team_total_${index}`,
     teamId: team.id,
-    label: `${team.label} 합계`,
+    label: team.label,
     stroke: team.color,
     strokeWidth: 2,
     opacity: 1,
@@ -977,7 +984,7 @@ export default function TeamBattleView({
   const [removedTeamIds, setRemovedTeamIds] = useState(DEFAULT_REMOVED_TEAM_IDS);
 
   const [entityMode, setEntityMode] = useState('repo');
-  const [rightChartMode, setRightChartMode] = useState('repo_rank');
+  const [rightChartMode, setRightChartMode] = useState('overall_rank');
   const [repoRankLineInput, setRepoRankLineInput] = useState(`+${DEFAULT_REPO_LINE_LIMIT}`);
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
@@ -1255,8 +1262,8 @@ export default function TeamBattleView({
     [nodes]
   );
 
-  const needAuthorRows = entityMode === 'user';
-  const needRepoRows = entityMode === 'repo' || rightChartMode === 'repo_rank';
+  const needAuthorRows = entityMode === 'user' || rightChartMode === 'user_rank';
+  const needRepoRows = entityMode === 'repo' || rightChartMode === 'overall_rank';
   const needRepoBattleRows = rightChartMode === 'repo_battle';
 
   const battleRowsBundle = useMemo(
@@ -1371,10 +1378,15 @@ export default function TeamBattleView({
     [teamTotalSeries, activeTeamIds]
   );
 
-  const rankingEntitySeries = useMemo(
-    () => (entityMode === 'repo' ? repoSeries : authorSeries),
-    [entityMode, repoSeries, authorSeries]
-  );
+  const rankingEntitySeries = useMemo(() => {
+    if (entityMode === 'repo') {
+      return repoSeries;
+    }
+    if (entityMode === 'user') {
+      return authorSeries;
+    }
+    return teamTotalSeries;
+  }, [entityMode, repoSeries, authorSeries, teamTotalSeries]);
 
   const rankingTeamEntitySeries = useMemo(
     () => rankingEntitySeries.filter((entity) => activeTeamIds.has(entity.teamId)),
@@ -1396,8 +1408,11 @@ export default function TeamBattleView({
     if (entityMode === 'repo') {
       return repoRows[rowIndex] ?? null;
     }
-    return authorRows[rowIndex] ?? null;
-  }, [activeMoment, entityMode, repoRows, authorRows]);
+    if (entityMode === 'user') {
+      return authorRows[rowIndex] ?? null;
+    }
+    return teamRows[rowIndex] ?? null;
+  }, [activeMoment, entityMode, repoRows, authorRows, teamRows]);
 
   const rankingRows = useMemo(() => {
     const row = activeRankingRow;
@@ -1473,19 +1488,28 @@ export default function TeamBattleView({
     [repoBattleRows]
   );
 
-  const repoRankMagnitudeSeries = useMemo(() => {
-    if (!repoRows.length) {
+  const isRepoBattleMode = rightChartMode === 'repo_battle';
+  const rightChartRankLabel = RIGHT_CHART_RANK_LABEL_BY_MODE[rightChartMode] ?? '레포 순위';
+  const rightChartRankRows = rightChartMode === 'user_rank'
+    ? authorRows
+    : (rightChartMode === 'team_rank' ? teamRows : repoRows);
+  const rightChartRankSeriesPool = rightChartMode === 'user_rank'
+    ? authorSeries
+    : (rightChartMode === 'team_rank' ? teamTotalSeries : repoSeries);
+
+  const rankMagnitudeSeries = useMemo(() => {
+    if (!rightChartRankRows.length) {
       return [];
     }
-    const lastRow = repoRows[repoRows.length - 1];
-    return repoSeries
+    const lastRow = rightChartRankRows[rightChartRankRows.length - 1];
+    return rightChartRankSeriesPool
       .map((series) => ({
         ...series,
         magnitude: Math.abs(Number(lastRow?.[series.key]) || 0),
       }))
       .filter((series) => series.magnitude > 0 && activeTeamIds.has(series.teamId))
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [repoRows, repoSeries, activeTeamIds]);
+  }, [rightChartRankRows, rightChartRankSeriesPool, activeTeamIds]);
 
   const repoRankLineConfig = useMemo(
     () => parseRepoRankLineInput(repoRankLineInput),
@@ -1496,51 +1520,49 @@ export default function TeamBattleView({
   const repoRankLineCount = repoRankLineConfig?.count ?? DEFAULT_REPO_LINE_LIMIT;
   const isRepoRankLineInputValid = Boolean(repoRankLineConfig);
 
-  const repoRankLineSeries = useMemo(() => {
+  const rankLineSeries = useMemo(() => {
     if (repoRankLineDirection === 'bottom') {
-      return [...repoRankMagnitudeSeries]
+      return [...rankMagnitudeSeries]
         .sort((a, b) => a.magnitude - b.magnitude || a.label.localeCompare(b.label))
         .slice(0, repoRankLineCount);
     }
-    return repoRankMagnitudeSeries.slice(0, repoRankLineCount);
-  }, [repoRankMagnitudeSeries, repoRankLineDirection, repoRankLineCount]);
+    return rankMagnitudeSeries.slice(0, repoRankLineCount);
+  }, [rankMagnitudeSeries, repoRankLineDirection, repoRankLineCount]);
 
-  const repoRankLineSeriesByKey = useMemo(
-    () => Object.fromEntries(repoRankLineSeries.map((series) => [series.key, series])),
-    [repoRankLineSeries]
+  const rankLineSeriesByKey = useMemo(
+    () => Object.fromEntries(rankLineSeries.map((series) => [series.key, series])),
+    [rankLineSeries]
   );
 
-  const isRepoBattleMode = rightChartMode === 'repo_battle';
-  const isRepoRankMode = rightChartMode === 'repo_rank';
-  const repoRankStackRows = useMemo(() => {
-    if (!repoRows.length || !repoRankLineSeries.length) {
+  const rankStackRows = useMemo(() => {
+    if (!rightChartRankRows.length || !rankLineSeries.length) {
       return [];
     }
 
-    return repoRows.map((row) => {
+    return rightChartRankRows.map((row) => {
       const nextRow = { ...row };
-      const denominator = repoRankLineSeries.reduce(
+      const denominator = rankLineSeries.reduce(
         (sum, series) => sum + Math.abs(Number(row?.[series.key]) || 0),
         0
       );
 
-      for (const series of repoRankLineSeries) {
+      for (const series of rankLineSeries) {
         const rawValue = Math.abs(Number(row?.[series.key]) || 0);
         nextRow[series.key] = denominator > 0 ? (rawValue / denominator) * 100 : 0;
       }
       return nextRow;
     });
-  }, [repoRows, repoRankLineSeries]);
+  }, [rightChartRankRows, rankLineSeries]);
 
   const repoRankLineToken = `${repoRankLineDirection === 'bottom' ? '-' : '+'}${repoRankLineCount}`;
-  const repoRankLineTitle = `${repoRankLineToken} 레포 누적 점유율`;
+  const repoRankLineTitle = `${repoRankLineToken} ${rightChartRankLabel} 누적 점유율`;
   const repoRankLineHint = isRepoRankLineInputValid
-    ? `${repoRankLineToken} 기준 ${Math.min(repoRankLineCount, repoRankLineSeries.length)}개 레포 점유율 누적(합계 100%)`
+    ? `${repoRankLineToken} 기준 ${Math.min(repoRankLineCount, rankLineSeries.length)}개 ${rightChartRankLabel} 누적 점유율(합계 100%)`
     : `입력 형식: +숫자 또는 -숫자 (예: +8, -8). 기본 +${DEFAULT_REPO_LINE_LIMIT} 적용`;
 
-  const lineChartRows = isRepoBattleMode ? repoBattleRows : repoRankStackRows;
-  const lineChartSeries = isRepoBattleMode ? REPO_BATTLE_SERIES : repoRankLineSeries;
-  const lineChartSeriesByKey = isRepoBattleMode ? repoBattleSeriesByKey : repoRankLineSeriesByKey;
+  const lineChartRows = isRepoBattleMode ? repoBattleRows : rankStackRows;
+  const lineChartSeries = isRepoBattleMode ? REPO_BATTLE_SERIES : rankLineSeries;
+  const lineChartSeriesByKey = isRepoBattleMode ? repoBattleSeriesByKey : rankLineSeriesByKey;
   const lineChartDomain = isRepoBattleMode ? repoBattleDomain : [0, 100];
   const lineChartYAxisTickFormatter = isRepoBattleMode
     ? undefined
@@ -1554,7 +1576,7 @@ export default function TeamBattleView({
     : repoRankLineHint;
   const lineChartEmptyText = isRepoBattleMode
     ? '프런트/백엔드 분류 레포 데이터가 없습니다.'
-    : '해당 시점의 레포 데이터가 없습니다.';
+    : `해당 시점의 ${rightChartRankLabel} 데이터가 없습니다.`;
   const hasLineChartData = lineChartRows.length > 0 && lineChartSeries.length > 0;
   const hasNegativeLineValue = isRepoBattleMode && lineChartDomain[0] < 0;
 
@@ -1610,8 +1632,12 @@ export default function TeamBattleView({
     );
   }, []);
 
-  const trendTargetLabel = entityMode === 'repo' ? '레포' : '사용자';
-  const rightChartTargetLabel = isRepoBattleMode ? '프런트 vs 백엔드' : '레포 순위';
+  const trendTargetLabel = entityMode === 'repo'
+    ? '레포'
+    : (entityMode === 'user' ? '사용자' : '팀');
+  const rightChartTargetLabel = isRepoBattleMode
+    ? '프런트 vs 백엔드'
+    : (RIGHT_CHART_RANK_LABEL_BY_MODE[rightChartMode] ?? '레포 순위');
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} ${trendTargetLabel} 기준 배틀 추이`;
 
   const trendDescription = showProjectPercent
@@ -1675,10 +1701,17 @@ export default function TeamBattleView({
                   size="xs"
                   radius="xl"
                   value={entityMode}
-                  onChange={(value) => setEntityMode(value === 'user' ? 'user' : 'repo')}
+                  onChange={(value) => {
+                    if (value === 'user' || value === 'team') {
+                      setEntityMode(value);
+                      return;
+                    }
+                    setEntityMode('repo');
+                  }}
                   data={[
                     { value: 'user', label: '사용자' },
                     { value: 'repo', label: '레포' },
+                    { value: 'team', label: '팀' },
                   ]}
                 />
               </Group>
@@ -1807,9 +1840,12 @@ export default function TeamBattleView({
             <Paper withBorder radius="md" p="sm" className="battle-ranking-panel">
               <Group justify="space-between" align="center" mb={8}>
                 <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                  {entityMode === 'repo' ? '레포 랭킹' : '사용자 랭킹'}
+                  {entityMode === 'repo' ? '레포 랭킹' : (entityMode === 'user' ? '사용자 랭킹' : '팀 랭킹')}
                 </Text>
-                <Badge color="gray" variant="light">{rankingRows.length}{entityMode === 'repo' ? '개' : '명'}</Badge>
+                <Badge color="gray" variant="light">
+                  {rankingRows.length}
+                  {entityMode === 'repo' ? '개' : (entityMode === 'user' ? '명' : '팀')}
+                </Badge>
               </Group>
               <div className="battle-ranking-list">
                 {rankingRows.map((item, index) => (
@@ -1821,7 +1857,9 @@ export default function TeamBattleView({
                       <Text size="sm" fw={700} className="battle-ranking-name" style={{ color: item.stroke }}>
                         {item.label}
                       </Text>
-                      <Text size="xs" c="dimmed">{item.teamLabel}</Text>
+                      {entityMode !== 'team' && (
+                        <Text size="xs" c="dimmed">{item.teamLabel}</Text>
+                      )}
                     </div>
                     <Text size="sm" fw={700}>
                       {showProjectPercent
@@ -1842,11 +1880,22 @@ export default function TeamBattleView({
                     w={180}
                     data={RIGHT_CHART_MODE_OPTIONS}
                     value={rightChartMode}
-                    onChange={(value) => setRightChartMode(value === 'repo_battle' ? 'repo_battle' : 'repo_rank')}
+                    onChange={(value) => {
+                      if (
+                        value === 'user_rank'
+                        || value === 'team_rank'
+                        || value === 'overall_rank'
+                        || value === 'repo_battle'
+                      ) {
+                        setRightChartMode(value);
+                        return;
+                      }
+                      setRightChartMode('overall_rank');
+                    }}
                     allowDeselect={false}
                     aria-label="우측 그래프 기준"
                   />
-                  {rightChartMode === 'repo_rank' && (
+                  {!isRepoBattleMode && (
                     <TextInput
                       size="xs"
                       w={122}
@@ -1857,7 +1906,7 @@ export default function TeamBattleView({
                         setRepoRankLineInput(parsed?.normalized ?? `+${DEFAULT_REPO_LINE_LIMIT}`);
                       }}
                       placeholder="+8 / -8"
-                      aria-label="레포 누적 추이 입력"
+                      aria-label="순위 누적 추이 입력"
                     />
                   )}
                   <Badge color="gray" variant="light">{activeTeamTotalSeries.length}개 팀</Badge>
@@ -1948,7 +1997,7 @@ export default function TeamBattleView({
                     ) : (
                       <div className="battle-team-line-wrap">
                         <ResponsiveContainer width="100%" height="100%">
-                          {isRepoRankMode ? (
+                          {!isRepoBattleMode ? (
                             <AreaChart
                               data={lineChartRows}
                               margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
