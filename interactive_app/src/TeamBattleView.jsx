@@ -955,6 +955,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   );
   const [logFiles, setLogFiles] = useState([]);
 
+  const [entityMode, setEntityMode] = useState('repo');
   const [rightChartMode, setRightChartMode] = useState('repo_rank');
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
@@ -1433,7 +1434,10 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [teamTotalSeries, activeTeamIds]
   );
 
-  const rankingEntitySeries = repoSeries;
+  const rankingEntitySeries = useMemo(
+    () => (entityMode === 'repo' ? repoSeries : authorSeries),
+    [entityMode, repoSeries, authorSeries]
+  );
 
   const rankingTeamEntitySeries = useMemo(
     () => rankingEntitySeries.filter((entity) => activeTeamIds.has(entity.teamId)),
@@ -1657,7 +1661,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     );
   }, []);
 
-  const trendTargetLabel = '레포';
+  const trendTargetLabel = entityMode === 'repo' ? '레포' : '사용자';
   const rightChartTargetLabel = isRepoBattleMode ? '프런트 vs 백엔드' : '레포 순위';
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} ${trendTargetLabel} 기준 배틀 추이`;
 
@@ -1695,7 +1699,25 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             </Stack>
             <Group gap="xs" className="battle-control-group">
               <Group gap={6} wrap="nowrap">
-                <Text size="xs" c="dimmed" fw={700}>랭킹 기준: 레포</Text>
+                <Text size="xs" c="dimmed" fw={700}>랭킹 기준</Text>
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={entityMode === 'user' ? 'filled' : 'default'}
+                  onClick={() => setEntityMode('user')}
+                >
+                  사용자
+                </Button>
+                <Button
+                  size="xs"
+                  color={actionButtonColor}
+                  radius={0}
+                  variant={entityMode === 'repo' ? 'filled' : 'default'}
+                  onClick={() => setEntityMode('repo')}
+                >
+                  레포
+                </Button>
               </Group>
               <Group gap={6} wrap="nowrap">
                 <Button
@@ -1814,9 +1836,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             <Paper withBorder radius="md" p="sm" className="battle-ranking-panel">
               <Group justify="space-between" align="center" mb={8}>
                 <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                  레포 랭킹
+                  {entityMode === 'repo' ? '레포 랭킹' : '사용자 랭킹'}
                 </Text>
-                <Badge color="gray" variant="light">{rankingRows.length}개</Badge>
+                <Badge color="gray" variant="light">{rankingRows.length}{entityMode === 'repo' ? '개' : '명'}</Badge>
               </Group>
               <div className="battle-ranking-list">
                 {rankingRows.map((item, index) => (
