@@ -16,13 +16,13 @@ import {
 } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
   LabelList,
-  Line,
-  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -1084,7 +1084,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       return;
     }
     const direction = delta > 0 ? 1 : -1;
-    const step = Math.max(1, Math.round(Math.abs(delta) / 90));
+    const step = Math.max(1, Math.round(Math.abs(delta) / 20));
     setActiveTrendIndex((prev) => {
       const fallbackIndex = activeTrendRows.length - 1;
       const currentIndex = Number.isInteger(prev) ? prev : fallbackIndex;
@@ -1176,28 +1176,21 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
     : formatNumber;
 
-  const topRankedAuthors = useMemo(
-    () => userRankingRows.slice(0, 5),
-    [userRankingRows]
-  );
-
-  const topAuthorSeries = useMemo(
-    () => topRankedAuthors.map((author) => ({
-      key: author.key,
-      id: author.id,
-      label: author.label,
-      stroke: author.stroke,
+  const teamAreaSeries = useMemo(
+    () => activeTeamTotalSeries.map((series) => ({
+      ...series,
+      label: teamById.get(series.teamId)?.label ?? series.label,
     })),
-    [topRankedAuthors]
+    [activeTeamTotalSeries, teamById]
   );
 
-  const topAuthorSeriesByKey = useMemo(
-    () => Object.fromEntries(topAuthorSeries.map((series) => [series.key, series])),
-    [topAuthorSeries]
+  const teamAreaSeriesByKey = useMemo(
+    () => Object.fromEntries(teamAreaSeries.map((series) => [series.key, series])),
+    [teamAreaSeries]
   );
 
-  const topAuthorLineRows = useMemo(() => {
-    if (!activeTrendRows.length || !topAuthorSeries.length) {
+  const teamAreaRows = useMemo(() => {
+    if (!activeTrendRows.length || !teamAreaSeries.length) {
       return [];
     }
     return activeTrendRows.map((row, index) => {
@@ -1207,16 +1200,16 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         label: formatKoreanDateTime(row.timestampMs),
         shortLabel: formatBattleMomentShort(row.timestampMs),
       };
-      for (const series of topAuthorSeries) {
+      for (const series of teamAreaSeries) {
         lineRow[series.key] = Number(row[series.key]) || 0;
       }
       return lineRow;
     });
-  }, [activeTrendRows, topAuthorSeries]);
+  }, [activeTrendRows, teamAreaSeries]);
 
-  const topAuthorLineDomain = useMemo(
-    () => buildSeriesValueBounds(topAuthorLineRows, topAuthorSeries),
-    [topAuthorLineRows, topAuthorSeries]
+  const teamAreaDomain = useMemo(
+    () => buildSeriesValueBounds(teamAreaRows, teamAreaSeries),
+    [teamAreaRows, teamAreaSeries]
   );
 
   const dialWindowText = useMemo(
@@ -1275,7 +1268,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const trendDescription = showProjectPercent
     ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + TOP5 사용자 꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText})`;
+    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 팀별 영역 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1518,21 +1511,22 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                   </div>
 
                   <div className="battle-team-chart-block">
-                    <Text size="xs" c="dimmed" fw={700} mb={4}>TOP5 사용자 추이 꺾은선</Text>
-                    {topAuthorSeries.length === 0 ? (
-                      <Text size="sm" c="dimmed">해당 시점의 TOP5 사용자가 없습니다.</Text>
+                    <Text size="xs" c="dimmed" fw={700} mb={4}>팀 추이 영역</Text>
+                    {teamAreaSeries.length === 0 ? (
+                      <Text size="sm" c="dimmed">해당 시점의 팀 데이터가 없습니다.</Text>
                     ) : (
                       <div className="battle-team-line-wrap">
                         <ResponsiveContainer width="100%" height="100%">
-                          <LineChart
-                            data={topAuthorLineRows}
+                          <AreaChart
+                            data={teamAreaRows}
+                            stackOffset="sign"
                             margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                             <XAxis
                               dataKey="index"
                               interval="preserveStartEnd"
-                              tickFormatter={(value) => topAuthorLineRows[value]?.shortLabel ?? ''}
+                              tickFormatter={(value) => teamAreaRows[value]?.shortLabel ?? ''}
                               minTickGap={18}
                               tick={{ fill: chartTickColor, fontSize: 11 }}
                               axisLine={{ stroke: chartAxisStroke }}
@@ -1540,7 +1534,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                             />
                             <YAxis
                               allowDecimals={showProjectPercent}
-                              domain={topAuthorLineDomain}
+                              domain={teamAreaDomain}
                               tickFormatter={
                                 showProjectPercent
                                   ? (value) => `${Math.round(Number(value) || 0)}%`
@@ -1553,31 +1547,34 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                             {Number.isFinite(activeLineMarkerIndex) && (
                               <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
                             )}
-                            {(useNetLines || topAuthorLineDomain[0] < 0) && (
+                            {(useNetLines || teamAreaDomain[0] < 0) && (
                               <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                             )}
                             <Tooltip
                               content={
                                 <TeamLineTooltip
-                                  seriesByKey={topAuthorSeriesByKey}
+                                  seriesByKey={teamAreaSeriesByKey}
                                   valueFormatter={teamStackValueFormatter}
                                   showPercent={showProjectPercent}
                                 />
                               }
                             />
-                            {topAuthorSeries.map((series) => (
-                              <Line
-                                key={`top-author-line-${series.id}`}
+                            {teamAreaSeries.map((series) => (
+                              <Area
+                                key={`team-area-${series.teamId}`}
                                 type="monotone"
                                 dataKey={series.key}
+                                stackId={`team-area-${metricMode}`}
                                 stroke={series.stroke}
-                                strokeWidth={1.9}
+                                fill={withAlpha(series.stroke, 0.26)}
+                                strokeWidth={1.6}
+                                fillOpacity={1}
                                 dot={false}
-                                connectNulls
+                                activeDot={false}
                                 isAnimationActive={false}
                               />
                             ))}
-                          </LineChart>
+                          </AreaChart>
                         </ResponsiveContainer>
                       </div>
                     )}
