@@ -752,7 +752,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   const [logFiles, setLogFiles] = useState([]);
 
   const [metricMode, setMetricMode] = useState('commits');
-  const [showProjectPercent] = useState(false);
+  const showProjectPercent = false;
+  const showTeamAreaPercent = true;
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
   const [excludeZeroLengthCommit, setExcludeZeroLengthCommit] = useState(false);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
@@ -1200,8 +1201,13 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         label: formatKoreanDateTime(row.timestampMs),
         shortLabel: formatBattleMomentShort(row.timestampMs),
       };
+
+      const rawValues = teamAreaSeries.map((series) => Number(row[series.key]) || 0);
+      const denominator = rawValues.reduce((sum, value) => sum + Math.abs(value), 0);
+
       for (const series of teamAreaSeries) {
-        lineRow[series.key] = Number(row[series.key]) || 0;
+        const value = Number(row[series.key]) || 0;
+        lineRow[series.key] = denominator > 0 ? (value / denominator) * 100 : 0;
       }
       return lineRow;
     });
@@ -1211,6 +1217,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     () => buildSeriesValueBounds(teamAreaRows, teamAreaSeries),
     [teamAreaRows, teamAreaSeries]
   );
+
+  const teamAreaValueFormatter = (value) => Number(value || 0)
+    .toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
   const dialWindowText = useMemo(
     () => `${formatKoreanDateTime(BATTLE_TIMELINE_START_MS)} ~ ${formatKoreanDateTime(BATTLE_TIMELINE_END_MS)}`,
@@ -1268,7 +1277,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const trendDescription = showProjectPercent
     ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 팀별 영역 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText})`;
+    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 팀별 영역 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 영역: 전체 대비(%))`;
 
   if (loading || fileListLoading) {
     return (
@@ -1511,7 +1520,10 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                   </div>
 
                   <div className="battle-team-chart-block">
-                    <Text size="xs" c="dimmed" fw={700} mb={4}>팀 추이 영역</Text>
+                    <Group justify="space-between" align="center" mb={4}>
+                      <Text size="xs" c="dimmed" fw={700}>팀 추이 영역</Text>
+                      <Text size="xs" c="dimmed">전체 대비(%)</Text>
+                    </Group>
                     {teamAreaSeries.length === 0 ? (
                       <Text size="sm" c="dimmed">해당 시점의 팀 데이터가 없습니다.</Text>
                     ) : (
@@ -1533,10 +1545,10 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                               tickLine={{ stroke: chartAxisStroke }}
                             />
                             <YAxis
-                              allowDecimals={showProjectPercent}
+                              allowDecimals={showTeamAreaPercent}
                               domain={teamAreaDomain}
                               tickFormatter={
-                                showProjectPercent
+                                showTeamAreaPercent
                                   ? (value) => `${Math.round(Number(value) || 0)}%`
                                   : undefined
                               }
@@ -1554,8 +1566,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                               content={
                                 <TeamLineTooltip
                                   seriesByKey={teamAreaSeriesByKey}
-                                  valueFormatter={teamStackValueFormatter}
-                                  showPercent={showProjectPercent}
+                                  valueFormatter={teamAreaValueFormatter}
+                                  showPercent={showTeamAreaPercent}
                                 />
                               }
                             />
