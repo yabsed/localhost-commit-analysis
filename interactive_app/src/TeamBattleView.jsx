@@ -24,6 +24,8 @@ import {
   IconSun,
 } from '@tabler/icons-react';
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -1508,22 +1510,41 @@ export default function TeamBattleView({
     [repoRankLineSeries]
   );
 
-  const repoRankLineDomain = useMemo(
-    () => buildSeriesValueBounds(repoRows, repoRankLineSeries),
-    [repoRows, repoRankLineSeries]
-  );
-
   const isRepoBattleMode = rightChartMode === 'repo_battle';
+  const isRepoRankMode = rightChartMode === 'repo_rank';
+  const repoRankStackRows = useMemo(() => {
+    if (!repoRows.length || !repoRankLineSeries.length) {
+      return [];
+    }
+
+    return repoRows.map((row) => {
+      const nextRow = { ...row };
+      const denominator = repoRankLineSeries.reduce(
+        (sum, series) => sum + Math.abs(Number(row?.[series.key]) || 0),
+        0
+      );
+
+      for (const series of repoRankLineSeries) {
+        const rawValue = Math.abs(Number(row?.[series.key]) || 0);
+        nextRow[series.key] = denominator > 0 ? (rawValue / denominator) * 100 : 0;
+      }
+      return nextRow;
+    });
+  }, [repoRows, repoRankLineSeries]);
+
   const repoRankLineToken = `${repoRankLineDirection === 'bottom' ? '-' : '+'}${repoRankLineCount}`;
-  const repoRankLineTitle = `${repoRankLineToken} 레포 누적 추이`;
+  const repoRankLineTitle = `${repoRankLineToken} 레포 누적 점유율`;
   const repoRankLineHint = isRepoRankLineInputValid
-    ? `${repoRankLineToken} 기준 ${Math.min(repoRankLineCount, repoRankLineSeries.length)}개 레포 누적 추이`
+    ? `${repoRankLineToken} 기준 ${Math.min(repoRankLineCount, repoRankLineSeries.length)}개 레포 점유율 누적(합계 100%)`
     : `입력 형식: +숫자 또는 -숫자 (예: +8, -8). 기본 +${DEFAULT_REPO_LINE_LIMIT} 적용`;
 
-  const lineChartRows = isRepoBattleMode ? repoBattleRows : repoRows;
+  const lineChartRows = isRepoBattleMode ? repoBattleRows : repoRankStackRows;
   const lineChartSeries = isRepoBattleMode ? REPO_BATTLE_SERIES : repoRankLineSeries;
   const lineChartSeriesByKey = isRepoBattleMode ? repoBattleSeriesByKey : repoRankLineSeriesByKey;
-  const lineChartDomain = isRepoBattleMode ? repoBattleDomain : repoRankLineDomain;
+  const lineChartDomain = isRepoBattleMode ? repoBattleDomain : [0, 100];
+  const lineChartYAxisTickFormatter = isRepoBattleMode
+    ? undefined
+    : (value) => `${Math.round(Number(value) || 0)}%`;
   const lineChartValueFormatter = formatNumber;
   const lineChartTitle = isRepoBattleMode
     ? '프런트 vs 백엔드 누적 추이'
@@ -1535,7 +1556,7 @@ export default function TeamBattleView({
     ? '프런트/백엔드 분류 레포 데이터가 없습니다.'
     : '해당 시점의 레포 데이터가 없습니다.';
   const hasLineChartData = lineChartRows.length > 0 && lineChartSeries.length > 0;
-  const hasNegativeLineValue = lineChartDomain[0] < 0;
+  const hasNegativeLineValue = isRepoBattleMode && lineChartDomain[0] < 0;
 
   const dialWindowText = useMemo(
     () => `${formatKoreanDateTime(BATTLE_TIMELINE_START_MS)} ~ ${formatKoreanDateTime(BATTLE_TIMELINE_END_MS)}`,
@@ -1927,55 +1948,112 @@ export default function TeamBattleView({
                     ) : (
                       <div className="battle-team-line-wrap">
                         <ResponsiveContainer width="100%" height="100%">
-                          <LineChart
-                            data={lineChartRows}
-                            margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
-                          >
-                            <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
-                            <XAxis
-                              dataKey="index"
-                              interval="preserveStartEnd"
-                              tickFormatter={(value) => lineChartRows[value]?.shortLabel ?? ''}
-                              minTickGap={18}
-                              tick={{ fill: chartTickColor, fontSize: 11 }}
-                              axisLine={{ stroke: chartAxisStroke }}
-                              tickLine={{ stroke: chartAxisStroke }}
-                            />
-                            <YAxis
-                              allowDecimals={false}
-                              domain={lineChartDomain}
-                              tick={{ fill: chartTickColor, fontSize: 11 }}
-                              axisLine={{ stroke: chartAxisStroke }}
-                              tickLine={{ stroke: chartAxisStroke }}
-                            />
-                            {Number.isFinite(activeLineMarkerIndex) && (
-                              <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
-                            )}
-                            {(useNetLines || hasNegativeLineValue) && (
-                              <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
-                            )}
-                            <Tooltip
-                              content={
-                                <TeamLineTooltip
-                                  seriesByKey={lineChartSeriesByKey}
-                                  valueFormatter={lineChartValueFormatter}
-                                  showPercent={false}
-                                />
-                              }
-                            />
-                            {lineChartSeries.map((series) => (
-                              <Line
-                                key={`battle-line-${series.key}`}
-                                type="monotone"
-                                dataKey={series.key}
-                                stroke={series.stroke}
-                                strokeWidth={2}
-                                dot={false}
-                                activeDot={{ r: 4 }}
-                                isAnimationActive={false}
+                          {isRepoRankMode ? (
+                            <AreaChart
+                              data={lineChartRows}
+                              margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                              <XAxis
+                                dataKey="index"
+                                interval="preserveStartEnd"
+                                tickFormatter={(value) => lineChartRows[value]?.shortLabel ?? ''}
+                                minTickGap={18}
+                                tick={{ fill: chartTickColor, fontSize: 11 }}
+                                axisLine={{ stroke: chartAxisStroke }}
+                                tickLine={{ stroke: chartAxisStroke }}
                               />
-                            ))}
-                          </LineChart>
+                              <YAxis
+                                allowDecimals={!isRepoBattleMode}
+                                domain={lineChartDomain}
+                                tickFormatter={lineChartYAxisTickFormatter}
+                                tick={{ fill: chartTickColor, fontSize: 11 }}
+                                axisLine={{ stroke: chartAxisStroke }}
+                                tickLine={{ stroke: chartAxisStroke }}
+                              />
+                              {Number.isFinite(activeLineMarkerIndex) && (
+                                <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
+                              )}
+                              {(useNetLines || hasNegativeLineValue) && (
+                                <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                              )}
+                              <Tooltip
+                                content={
+                                  <TeamLineTooltip
+                                    seriesByKey={lineChartSeriesByKey}
+                                    valueFormatter={lineChartValueFormatter}
+                                    showPercent
+                                  />
+                                }
+                              />
+                              {lineChartSeries.map((series) => (
+                                <Area
+                                  key={`battle-area-${series.key}`}
+                                  stackId="repo-rank-percent"
+                                  type="monotone"
+                                  dataKey={series.key}
+                                  stroke={series.stroke}
+                                  fill={series.stroke}
+                                  fillOpacity={0.16}
+                                  strokeWidth={2}
+                                  dot={false}
+                                  activeDot={{ r: 4 }}
+                                  isAnimationActive={false}
+                                />
+                              ))}
+                            </AreaChart>
+                          ) : (
+                            <LineChart
+                              data={lineChartRows}
+                              margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
+                            >
+                              <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                              <XAxis
+                                dataKey="index"
+                                interval="preserveStartEnd"
+                                tickFormatter={(value) => lineChartRows[value]?.shortLabel ?? ''}
+                                minTickGap={18}
+                                tick={{ fill: chartTickColor, fontSize: 11 }}
+                                axisLine={{ stroke: chartAxisStroke }}
+                                tickLine={{ stroke: chartAxisStroke }}
+                              />
+                              <YAxis
+                                allowDecimals={!isRepoBattleMode}
+                                domain={lineChartDomain}
+                                tickFormatter={lineChartYAxisTickFormatter}
+                                tick={{ fill: chartTickColor, fontSize: 11 }}
+                                axisLine={{ stroke: chartAxisStroke }}
+                                tickLine={{ stroke: chartAxisStroke }}
+                              />
+                              {Number.isFinite(activeLineMarkerIndex) && (
+                                <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
+                              )}
+                              {(useNetLines || hasNegativeLineValue) && (
+                                <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                              )}
+                              <Tooltip
+                                content={
+                                  <TeamLineTooltip
+                                    seriesByKey={lineChartSeriesByKey}
+                                    valueFormatter={lineChartValueFormatter}
+                                    showPercent={false}
+                                  />
+                                }
+                              />
+                              {lineChartSeries.map((series) => (
+                                <Line
+                                  key={`battle-line-${series.key}`}
+                                  type="monotone"
+                                  dataKey={series.key}
+                                  stroke={series.stroke}
+                                  strokeWidth={2}
+                                  dot={false}
+                                  activeDot={{ r: 4 }}
+                                  isAnimationActive={false}
+                                />
+                              ))}
+                            </LineChart>
+                          )}
                         </ResponsiveContainer>
                       </div>
                     )}
