@@ -751,7 +751,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   const [logFiles, setLogFiles] = useState([]);
 
   const [metricMode, setMetricMode] = useState('commits');
-  const [showProjectPercent, setShowProjectPercent] = useState(false);
+  const [showProjectPercent] = useState(false);
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
   const [excludeZeroLengthCommit, setExcludeZeroLengthCommit] = useState(false);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
@@ -1064,7 +1064,10 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     if (activeTrendRows.length <= 1) {
       return;
     }
-    event.preventDefault();
+    const tagName = String(event?.target?.tagName || '').toLowerCase();
+    if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') {
+      return;
+    }
     const delta = Number(event.deltaY) || 0;
     if (delta === 0) {
       return;
@@ -1139,9 +1142,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   }, [activeMoment, activeTeamTotalSeries, authorSeries, teamById]);
 
   const activeTeamAuthors = useMemo(
-    () => authorSeries.filter((author) =>
-      teamStackRows.some((row) => Math.abs(Number(row[author.key]) || 0) > 0)),
-    [authorSeries, teamStackRows]
+    () => authorSeries.filter((author) => activeTeamIdsInWindow.has(author.teamId)),
+    [authorSeries, activeTeamIdsInWindow]
   );
 
   const teamStackSeries = activeTeamAuthors;
@@ -1199,20 +1201,34 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     []
   );
 
+  const activeLineMarkerLabel = useMemo(
+    () => (activeMoment?.row ? formatBattleMomentShort(activeMoment.row.timestampMs) : null),
+    [activeMoment]
+  );
+
   const renderTeamSegmentLabel = useCallback((props, authorLabel) => {
-    const safeWidth = Number(props?.width) || 0;
+    const rawX = Number(props?.x) || 0;
+    const rawY = Number(props?.y) || 0;
+    const rawWidth = Number(props?.width) || 0;
     const rawHeight = Number(props?.height) || 0;
+    const safeWidth = Math.abs(rawWidth);
     const safeHeight = Math.abs(rawHeight);
     const magnitude = Math.abs(Number(props?.value) || 0);
-    if (!authorLabel || magnitude === 0 || safeWidth < 54 || safeHeight < 22) {
+    const baseLabel = String(authorLabel || '').trim();
+    if (!baseLabel || magnitude === 0 || safeWidth < 34 || safeHeight < 14) {
       return null;
     }
 
-    const baseX = Number(props?.x) || 0;
-    const baseY = Number(props?.y) || 0;
-    const isNegative = rawHeight < 0;
-    const textX = baseX + (safeWidth / 2);
-    const textY = isNegative ? baseY + safeHeight - 6 : baseY + 13;
+    const textLabel = baseLabel.length > 10 ? `${baseLabel.slice(0, 9)}…` : baseLabel;
+    const minRequiredWidth = Math.max(30, textLabel.length * 5.7);
+    if (safeWidth < minRequiredWidth) {
+      return null;
+    }
+
+    const leftX = rawWidth >= 0 ? rawX : rawX + rawWidth;
+    const topY = rawHeight >= 0 ? rawY : rawY + rawHeight;
+    const textX = leftX + (safeWidth / 2);
+    const textY = topY + (safeHeight / 2) + 3;
 
     return (
       <text
@@ -1227,7 +1243,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         paintOrder="stroke"
         pointerEvents="none"
       >
-        {authorLabel}
+        {textLabel}
       </text>
     );
   }, []);
@@ -1258,7 +1274,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   }
 
   return (
-    <main className="battle-shell">
+    <main className="battle-shell" onWheelCapture={handleDialWheel}>
       <div className="battle-scroll">
         <Card className="chart-card battle-main-card card-enter delay-2" radius="xl" p="lg" withBorder>
           <Group justify="space-between" align="flex-start" wrap="wrap">
@@ -1290,14 +1306,6 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
           <div className="battle-option-slot">
             <Group gap="xs" wrap="nowrap" className="stack-chart-option-group">
-              <Checkbox
-                size="sm"
-                color={actionButtonColor}
-                radius={0}
-                checked={showProjectPercent}
-                onChange={(event) => setShowProjectPercent(event.currentTarget.checked)}
-                label="기여율(%)"
-              />
               <Group gap={6} wrap="nowrap">
                 <Checkbox
                   size="sm"
@@ -1365,7 +1373,6 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             radius="md"
             p="sm"
             className="battle-dial-panel"
-            onWheel={handleDialWheel}
           >
             <Group justify="space-between" align="center" mb={4}>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>시점 다이얼</Text>
@@ -1477,6 +1484,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                               dataKey={author.key}
                               stackId={metricMode}
                               fill={author.stroke}
+                              isAnimationActive={false}
                             >
                               <LabelList
                                 dataKey={author.key}
@@ -1516,13 +1524,16 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                             domain={teamLineDomain}
                             tickFormatter={
                               showProjectPercent
-                                ? (value) => `${Math.round(Number(value) || 0)}%`
+                              ? (value) => `${Math.round(Number(value) || 0)}%`
                                 : undefined
                             }
                             tick={{ fill: chartTickColor, fontSize: 11 }}
                             axisLine={{ stroke: chartAxisStroke }}
                             tickLine={{ stroke: chartAxisStroke }}
                           />
+                          {activeLineMarkerLabel && (
+                            <ReferenceLine x={activeLineMarkerLabel} stroke={chartReferenceStroke} strokeWidth={1.6} />
+                          )}
                           {(useNetLines || teamLineDomain[0] < 0) && (
                             <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                           )}
@@ -1544,6 +1555,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                               strokeWidth={1.9}
                               dot={false}
                               connectNulls
+                              isAnimationActive={false}
                             />
                           ))}
                         </LineChart>
