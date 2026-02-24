@@ -130,14 +130,13 @@ body {
 .battle-chart-layout {
   margin-top: 8px;
   display: grid;
-  grid-template-columns: minmax(220px, 260px) minmax(260px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
 }
 
 .battle-ranking-panel,
-.battle-rect-panel,
-.battle-line-wrap {
+.battle-rect-panel {
   height: var(--chart-height);
 }
 
@@ -174,59 +173,9 @@ body {
   text-overflow: ellipsis;
 }
 
-.battle-rect-map {
+.battle-team-bar-wrap {
   width: 100%;
   height: calc(100% - 30px);
-  display: flex;
-  gap: 8px;
-}
-
-.battle-team-rect {
-  min-width: 0;
-  border: 1px solid;
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.battle-team-rect-head {
-  padding: 4px 6px;
-}
-
-.battle-team-rect-title {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.battle-team-rect-users {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.battle-user-rect {
-  min-height: 16px;
-  border-top: 1px solid rgba(255, 255, 255, 0.95);
-  border-left: 1px solid rgba(255, 255, 255, 0.92);
-  border-right: 1px solid rgba(255, 255, 255, 0.92);
-  padding: 2px 4px;
-  display: flex;
-  align-items: center;
-}
-
-.battle-user-rect:first-child {
-  border-top: 1px solid rgba(255, 255, 255, 0.96);
-}
-
-.battle-user-rect span {
-  font-size: 11px;
-  line-height: 1.1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .left-pane,
@@ -557,10 +506,6 @@ body {
   .battle-ranking-panel,
   .battle-rect-panel {
     height: clamp(220px, 34vh, 280px);
-  }
-
-  .battle-line-wrap {
-    height: var(--chart-height);
   }
 
 }

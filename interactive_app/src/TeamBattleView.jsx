@@ -7,7 +7,6 @@ import {
   Checkbox,
   Group,
   Loader,
-  MultiSelect,
   NumberInput,
   Paper,
   Slider,
@@ -15,11 +14,12 @@ import {
   Text,
   Title,
 } from '@mantine/core';
-import { IconAlertCircle, IconMoon, IconSun } from '@tabler/icons-react';
+import { IconAlertCircle } from '@tabler/icons-react';
 import {
+  Bar,
+  BarChart,
   CartesianGrid,
-  Line,
-  LineChart,
+  Cell,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -544,30 +544,6 @@ function buildAuthorRows(
   });
 }
 
-function buildDomain(rows, series, showPercent) {
-  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(series) || series.length === 0) {
-    return showPercent ? [-100, 100] : [0, 1];
-  }
-
-  const values = rows.flatMap((row) => series.map((item) => Number(row[item.key]) || 0));
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-
-  if (showPercent) {
-    const boundedMin = Math.min(0, min);
-    const boundedMax = Math.max(0, max);
-    if (boundedMin === boundedMax) {
-      return [boundedMin - 1, boundedMax + 1];
-    }
-    return [boundedMin, boundedMax];
-  }
-
-  if (min === max) {
-    return [min - 1, max + 1];
-  }
-  return [min, max];
-}
-
 function toNumericInputValue(rawValue) {
   if (rawValue === '' || rawValue === null || rawValue === undefined) {
     return '';
@@ -575,11 +551,30 @@ function toNumericInputValue(rawValue) {
   return String(rawValue);
 }
 
-export default function TeamBattleView({ colorScheme = 'light', onToggleColorScheme = () => {} }) {
+function TeamTotalTooltip({ active, payload, showPercent = false }) {
+  if (!active || !Array.isArray(payload) || payload.length === 0) {
+    return null;
+  }
+
+  const item = payload[0];
+  const teamLabel = item?.payload?.teamLabel ?? item?.name ?? '-';
+  const value = Number(item?.value) || 0;
+  const valueText = showPercent
+    ? `${value.toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+    : formatNumber(value);
+
+  return (
+    <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
+      <Text size="sm" c="dimmed" mb={4}>{teamLabel}</Text>
+      <Text size="sm" fw={700}>{valueText}</Text>
+    </Paper>
+  );
+}
+
+export default function TeamBattleView({ colorScheme = 'light' }) {
   const [teamPayloads, setTeamPayloads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fileListLoading, setFileListLoading] = useState(true);
-  const [refreshingFileList, setRefreshingFileList] = useState(false);
   const [error, setError] = useState('');
   const [identityRuleError, setIdentityRuleError] = useState('');
   const [identityRulesText, setIdentityRulesText] = useState(
@@ -587,7 +582,6 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
   );
   const [logFiles, setLogFiles] = useState([]);
 
-  const [selectedTeamIds, setSelectedTeamIds] = useState([]);
   const [metricMode, setMetricMode] = useState('commits');
   const [showProjectPercent, setShowProjectPercent] = useState(false);
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
@@ -603,17 +597,14 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
     [identityRulesText]
   );
 
-  const isDarkMode = colorScheme === 'dark';
-  const actionButtonColor = isDarkMode ? 'gray' : 'dark';
-  const chartGridStroke = isDarkMode ? '#474b57' : '#d3d3d3';
-  const chartReferenceStroke = isDarkMode ? '#7e8694' : '#8f8f8f';
+  const actionButtonColor = colorScheme === 'dark' ? 'gray' : 'dark';
+  const chartGridStroke = colorScheme === 'dark' ? 'rgba(181, 197, 227, 0.25)' : 'rgba(24, 24, 24, 0.14)';
+  const chartReferenceStroke = colorScheme === 'dark' ? 'rgba(218, 228, 248, 0.6)' : 'rgba(24, 24, 24, 0.45)';
+  const chartTickColor = colorScheme === 'dark' ? '#c0cbdf' : '#575757';
+  const chartAxisStroke = colorScheme === 'dark' ? '#7b879f' : '#9b9b9b';
 
-  const loadLogFiles = useCallback(async ({ manual = false } = {}) => {
-    if (manual) {
-      setRefreshingFileList(true);
-    } else {
-      setFileListLoading(true);
-    }
+  const loadLogFiles = useCallback(async () => {
+    setFileListLoading(true);
 
     try {
       let files = [];
@@ -643,11 +634,7 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (manual) {
-        setRefreshingFileList(false);
-      } else {
-        setFileListLoading(false);
-      }
+      setFileListLoading(false);
     }
   }, []);
 
@@ -759,51 +746,6 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
   const authorSeries = prepared.authorSeries;
   const authorKeyById = prepared.authorKeyById;
   const teams = prepared.teams;
-  const teamOptions = useMemo(
-    () => teams.map((team) => ({ value: team.id, label: team.label })),
-    [teams]
-  );
-
-  useEffect(() => {
-    if (!teams.length) {
-      setSelectedTeamIds([]);
-      return;
-    }
-
-    setSelectedTeamIds((current) => {
-      const availableIds = new Set(teams.map((team) => team.id));
-      const preserved = current.filter((teamId) => availableIds.has(teamId)).slice(0, 3);
-      if (preserved.length > 0) {
-        return preserved;
-      }
-      return teams.slice(0, Math.min(3, teams.length)).map((team) => team.id);
-    });
-  }, [teams]);
-
-  const selectedTeamSet = useMemo(
-    () => new Set(selectedTeamIds),
-    [selectedTeamIds]
-  );
-  const visibleTeams = useMemo(
-    () => teams.filter((team) => selectedTeamSet.has(team.id)),
-    [teams, selectedTeamSet]
-  );
-  const visibleNodes = useMemo(
-    () => nodes.filter((node) => selectedTeamSet.has(node.teamId)),
-    [nodes, selectedTeamSet]
-  );
-  const visibleTeamTotalSeries = useMemo(
-    () => teamTotalSeries.filter((series) => selectedTeamSet.has(series.teamId)),
-    [teamTotalSeries, selectedTeamSet]
-  );
-  const visibleAuthorIds = useMemo(
-    () => new Set(visibleNodes.map((node) => node.authorId)),
-    [visibleNodes]
-  );
-  const visibleAuthorSeries = useMemo(
-    () => authorSeries.filter((series) => visibleAuthorIds.has(series.id)),
-    [authorSeries, visibleAuthorIds]
-  );
 
   const topLongCommitPercent = useMemo(() => {
     if (topLongCommitPercentInput === '') {
@@ -817,13 +759,13 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
   }, [topLongCommitPercentInput]);
 
   const topLongestCommitIds = useMemo(
-    () => buildTopLongestCommitIdSet(visibleNodes, topLongCommitPercent / 100),
-    [visibleNodes, topLongCommitPercent]
+    () => buildTopLongestCommitIdSet(nodes, topLongCommitPercent / 100),
+    [nodes, topLongCommitPercent]
   );
 
   const zeroLengthCommitIds = useMemo(
-    () => buildZeroLengthCommitIdSet(visibleNodes),
-    [visibleNodes]
+    () => buildZeroLengthCommitIdSet(nodes),
+    [nodes]
   );
 
   const activeExcludedCommitIds = useMemo(() => {
@@ -850,16 +792,16 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
 
   const teamRows = useMemo(
     () => buildTeamRows(
-      visibleNodes,
-      visibleTeamTotalSeries,
+      nodes,
+      teamTotalSeries,
       metricForTrend,
       useNetLines,
       showProjectPercent,
       activeExcludedCommitIds
     ),
     [
-      visibleNodes,
-      visibleTeamTotalSeries,
+      nodes,
+      teamTotalSeries,
       metricForTrend,
       useNetLines,
       showProjectPercent,
@@ -869,8 +811,8 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
 
   const authorRows = useMemo(
     () => buildAuthorRows(
-      visibleNodes,
-      visibleAuthorSeries,
+      nodes,
+      authorSeries,
       authorKeyById,
       metricForTrend,
       useNetLines,
@@ -878,8 +820,8 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
       activeExcludedCommitIds
     ),
     [
-      visibleNodes,
-      visibleAuthorSeries,
+      nodes,
+      authorSeries,
       authorKeyById,
       metricForTrend,
       useNetLines,
@@ -908,15 +850,6 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
     }
     return rows;
   }, [teamRows, authorRows]);
-  const activeTrendSeries = useMemo(
-    () => [...visibleTeamTotalSeries, ...visibleAuthorSeries],
-    [visibleTeamTotalSeries, visibleAuthorSeries]
-  );
-
-  const trendDomain = useMemo(
-    () => buildDomain(activeTrendRows, activeTrendSeries, showProjectPercent),
-    [activeTrendRows, activeTrendSeries, showProjectPercent]
-  );
 
   useEffect(() => {
     if (!activeTrendRows.length) {
@@ -941,8 +874,8 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
   }, [activeTrendRows, activeTrendIndex]);
 
   const teamById = useMemo(
-    () => new Map(visibleTeams.map((team) => [team.id, team])),
-    [visibleTeams]
+    () => new Map(teams.map((team) => [team.id, team])),
+    [teams]
   );
 
   const userRankingRows = useMemo(() => {
@@ -950,7 +883,7 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
     if (!row) {
       return [];
     }
-    return visibleAuthorSeries
+    return authorSeries
       .map((series) => {
         const signedValue = Number(row[series.key]) || 0;
         const team = teamById.get(series.teamId);
@@ -963,35 +896,37 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
       })
       .filter((item) => item.magnitude > 0)
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, visibleAuthorSeries, teamById]);
+  }, [activeMoment, authorSeries, teamById]);
 
-  const teamRectRows = useMemo(() => {
+  const teamBarRows = useMemo(() => {
     const row = activeMoment?.row;
     if (!row) {
       return [];
     }
 
-    return visibleTeamTotalSeries
-      .map((item) => ({
-        ...item,
-        signedValue: Number(row[item.key]) || 0,
-        magnitude: Math.abs(Number(row[item.key]) || 0),
+    return teamTotalSeries.map((item) => {
+      const signedValue = Number(row[item.key]) || 0;
+      return {
+        key: item.key,
+        teamId: item.teamId,
         teamLabel: teamById.get(item.teamId)?.label ?? item.label,
-        users: userRankingRows.filter((user) => user.teamId === item.teamId),
-      }))
-      .filter((item) => item.magnitude > 0)
-      .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, visibleTeamTotalSeries, teamById, userRankingRows]);
+        value: signedValue,
+        magnitude: Math.abs(signedValue),
+        stroke: item.stroke,
+      };
+    });
+  }, [activeMoment, teamTotalSeries, teamById]);
+
+  const hasNegativeTeamValue = useMemo(
+    () => teamBarRows.some((item) => item.value < 0),
+    [teamBarRows]
+  );
 
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} 팀+사용자 통합 추이`;
 
   const trendDescription = showProjectPercent
-    ? '팀 합계(굵은 선)와 사용자(얇은 선)를 같은 축에서 기여율(%)로 비교합니다.'
-    : `팀 합계(굵은 선)와 사용자(얇은 선)를 같은 그래프에서 비교합니다. (${useNetLines ? '순변경' : '총변경'})`;
-
-  const yAxisTickFormatter = showProjectPercent
-    ? (value) => `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-    : undefined;
+    ? '시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다.'
+    : `시점 다이얼 기준으로 사용자 랭킹과 팀별 막대그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1015,80 +950,6 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
   return (
     <main className="battle-shell">
       <div className="battle-scroll">
-        <Card className="hero-card card-enter delay-0" radius="xl" p="lg" withBorder>
-          <Group justify="space-between" align="flex-start" wrap="wrap">
-            <Stack gap="xs">
-              <Title order={2}>Team Battle</Title>
-              <Text size="sm" c="dimmed">
-                팀명은 `json 파일명` 기준이며, 한 번에 최대 3팀만 선택해서 비교할 수 있습니다.
-              </Text>
-            </Stack>
-            <Group gap="xs" align="flex-end" wrap="wrap">
-              <Button
-                variant="default"
-                color="gray"
-                onClick={() => loadLogFiles({ manual: true })}
-                loading={refreshingFileList}
-              >
-                팀 파일 새로고침
-              </Button>
-              <Button
-                size="sm"
-                color={actionButtonColor}
-                variant="default"
-                onClick={onToggleColorScheme}
-                leftSection={isDarkMode ? <IconSun size={14} /> : <IconMoon size={14} />}
-              >
-                {isDarkMode ? '라이트 모드' : '다크 모드'}
-              </Button>
-            </Group>
-          </Group>
-
-          <MultiSelect
-            label="비교 팀 선택 (최대 3)"
-            data={teamOptions}
-            value={selectedTeamIds}
-            onChange={(values) => setSelectedTeamIds(values.slice(0, 3))}
-            maxValues={3}
-            searchable
-            nothingFoundMessage="팀이 없습니다."
-            mt="sm"
-            w={420}
-          />
-
-          <Group gap="xs" mt="sm" wrap="wrap">
-            {visibleTeams.map((team) => (
-              <Badge
-                key={`team-badge-${team.id}`}
-                variant="light"
-                styles={{
-                  root: {
-                    backgroundColor: withAlpha(team.color, 0.14),
-                    borderColor: withAlpha(team.color, 0.44),
-                    color: 'var(--text-main)',
-                  },
-                }}
-              >
-                {team.label}
-              </Badge>
-            ))}
-          </Group>
-          {selectedTeamIds.length === 0 && (
-            <Text size="xs" c="dimmed" mt="xs">비교할 팀을 1개 이상 선택하세요.</Text>
-          )}
-
-          {identityRules.invalidLines.length > 0 && (
-            <Text size="xs" c="dimmed" mt="xs">
-              병합 규칙 {identityRules.invalidLines.length}개 줄은 형식 오류로 무시되었습니다.
-            </Text>
-          )}
-          {identityRuleError && (
-            <Alert variant="light" color="gray" icon={<IconAlertCircle size={14} />} mt="sm">
-              작성자 병합 규칙 로드 실패: {identityRuleError}
-            </Alert>
-          )}
-        </Card>
-
         <Card className="chart-card card-enter delay-2" radius="xl" p="lg" withBorder>
           <Group justify="space-between" align="flex-start" wrap="wrap">
             <Stack gap="xs">
@@ -1178,6 +1039,17 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
             </Group>
           </div>
 
+          {identityRules.invalidLines.length > 0 && (
+            <Text size="xs" c="dimmed" mt="xs">
+              병합 규칙 {identityRules.invalidLines.length}개 줄은 형식 오류로 무시되었습니다.
+            </Text>
+          )}
+          {identityRuleError && (
+            <Alert variant="light" color="gray" icon={<IconAlertCircle size={14} />} mt="sm">
+              작성자 병합 규칙 로드 실패: {identityRuleError}
+            </Alert>
+          )}
+
           <Paper withBorder radius="md" p="sm" className="battle-dial-panel">
             <Group justify="space-between" align="center" mb={4}>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>시점 다이얼</Text>
@@ -1204,7 +1076,7 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
                 <Badge color="gray" variant="light">{userRankingRows.length}명</Badge>
               </Group>
               <div className="battle-ranking-list">
-                {userRankingRows.slice(0, 18).map((user, index) => (
+                {userRankingRows.map((user, index) => (
                   <div key={`ranking-${user.key}`} className="battle-ranking-item">
                     <Text size="xs" fw={700} c="dimmed" className="battle-ranking-order">
                       {index + 1}
@@ -1227,119 +1099,57 @@ export default function TeamBattleView({ colorScheme = 'light', onToggleColorSch
 
             <Paper withBorder radius="md" p="sm" className="battle-rect-panel">
               <Group justify="space-between" align="center" mb={8}>
-                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀/사용자 점유 맵</Text>
-                <Badge color="gray" variant="light">{teamRectRows.length}개 팀</Badge>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀 막대그래프</Text>
+                <Badge color="gray" variant="light">{teamBarRows.length}개 팀</Badge>
               </Group>
-              <div className="battle-rect-map">
-                {teamRectRows.map((teamRow) => (
-                  <div
-                    key={`rect-team-${teamRow.key}`}
-                    className="battle-team-rect"
-                    style={{
-                      flexGrow: Math.max(1, teamRow.magnitude),
-                      backgroundColor: withAlpha(teamRow.stroke, 0.16),
-                      borderColor: withAlpha(teamRow.stroke, 0.55),
-                    }}
+              <div className="battle-team-bar-wrap">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={teamBarRows}
+                    margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
                   >
-                    <div className="battle-team-rect-head">
-                      <Text size="xs" fw={700} className="battle-team-rect-title">{teamRow.teamLabel}</Text>
-                    </div>
-                    <div className="battle-team-rect-users">
-                      {teamRow.users.map((user) => (
-                        <div
-                          key={`rect-user-${teamRow.key}-${user.key}`}
-                          className="battle-user-rect"
-                          style={{
-                            flexGrow: Math.max(1, user.magnitude),
-                            backgroundColor: user.stroke,
-                          }}
-                          title={`${user.label} (${user.teamLabel})`}
-                        >
-                          <span>{user.label}</span>
-                        </div>
+                    <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
+                    <XAxis
+                      dataKey="teamLabel"
+                      interval={0}
+                      height={teamBarRows.length > 6 ? 44 : 26}
+                      angle={teamBarRows.length > 6 ? -18 : 0}
+                      textAnchor={teamBarRows.length > 6 ? 'end' : 'middle'}
+                      tick={{ fill: chartTickColor, fontSize: 11 }}
+                      axisLine={{ stroke: chartAxisStroke }}
+                      tickLine={{ stroke: chartAxisStroke }}
+                    />
+                    <YAxis
+                      allowDecimals={showProjectPercent}
+                      domain={hasNegativeTeamValue ? ['auto', 'auto'] : [0, 'auto']}
+                      tickFormatter={
+                        showProjectPercent
+                          ? (value) => `${Math.round(Number(value) || 0)}%`
+                          : undefined
+                      }
+                      tick={{ fill: chartTickColor, fontSize: 11 }}
+                      axisLine={{ stroke: chartAxisStroke }}
+                      tickLine={{ stroke: chartAxisStroke }}
+                    />
+                    {(useNetLines || hasNegativeTeamValue) && (
+                      <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
+                    )}
+                    <Tooltip content={<TeamTotalTooltip showPercent={showProjectPercent} />} />
+                    <Bar dataKey="value">
+                      {teamBarRows.map((item) => (
+                        <Cell
+                          key={`team-total-bar-${item.teamId}`}
+                          fill={item.stroke}
+                          fillOpacity={item.magnitude > 0 ? 1 : 0.45}
+                        />
                       ))}
-                    </div>
-                  </div>
-                ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </Paper>
-
-            <div className="battle-line-wrap">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={activeTrendRows} margin={{ top: 20, right: 10, left: 0, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
-                  <XAxis
-                    dataKey="timestampMs"
-                    type="number"
-                    domain={['dataMin', 'dataMax']}
-                    tickFormatter={(value) => formatKoreanDateTime(value)}
-                    tickCount={6}
-                  />
-                  <YAxis
-                    allowDecimals={showProjectPercent}
-                    domain={trendDomain}
-                    tickFormatter={yAxisTickFormatter}
-                  />
-                  {!showProjectPercent && metricMode === 'lines' && useNetLines && (
-                    <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
-                  )}
-                  {activeMoment?.row && (
-                    <ReferenceLine x={activeMoment.row.timestampMs} stroke={chartReferenceStroke} strokeDasharray="4 4" />
-                  )}
-                  <Tooltip
-                    labelFormatter={(value) => formatKoreanDateTime(value)}
-                    formatter={(value, name) => {
-                      return [
-                        showProjectPercent
-                          ? `${Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-                          : formatNumber(value),
-                        name,
-                      ];
-                    }}
-                  />
-                  {activeTrendSeries.map((series) => (
-                    <Line
-                      key={series.key}
-                      type="stepAfter"
-                      name={series.label}
-                      dataKey={series.key}
-                      stroke={series.stroke}
-                      strokeWidth={series.strokeWidth ?? 2}
-                      strokeOpacity={series.opacity ?? 1}
-                      dot={false}
-                      activeDot={{ r: series.isTeamTotal ? 3.5 : 2.8 }}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
           </div>
         </Card>
-
-        <Paper withBorder radius="md" p="sm" className="legend-card card-enter delay-3">
-          <Group gap="xs" mb={8}>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>선택 시점 팀 합계</Text>
-            <Badge color="gray" variant="light">{visibleTeamTotalSeries.length}개 팀</Badge>
-          </Group>
-          <div className="author-legend">
-            {teamRectRows.map((series) => {
-              const value = Number(series.signedValue) || 0;
-              return (
-                <Text
-                  key={`battle-series-${series.key}`}
-                  size="sm"
-                  fw={700}
-                  className="author-name-item"
-                  style={{ color: series.stroke }}
-                >
-                  {series.teamLabel}: {showProjectPercent
-                    ? `${Number(value).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-                    : formatNumber(value)}
-                </Text>
-              );
-            })}
-          </div>
-        </Paper>
       </div>
     </main>
   );
