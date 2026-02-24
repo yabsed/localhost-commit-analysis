@@ -16,13 +16,13 @@ import {
 } from '@mantine/core';
 import { IconAlertCircle } from '@tabler/icons-react';
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
   LabelList,
+  Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -53,6 +53,26 @@ const TEAM_BASE_COLORS = [
   '#15803d',
   '#7c2d12',
   '#334155',
+];
+const REPO_BATTLE_SERIES = [
+  {
+    id: 'backend',
+    key: 'repo_group_backend',
+    label: '백엔드',
+    stroke: '#dc2626',
+  },
+  {
+    id: 'frontend',
+    key: 'repo_group_frontend',
+    label: '프런트',
+    stroke: '#1d4ed8',
+  },
+  {
+    id: 'other',
+    key: 'repo_group_other',
+    label: '기타',
+    stroke: '#475569',
+  },
 ];
 
 function resolveAppAssetUrl(relativePath) {
@@ -336,6 +356,7 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
         teamId,
         repoId,
         projectId: repoId,
+        repoName: String(node.projectId || ''),
         timestampMs: Number(node.timestampMs) || 0,
         sourceOrder: Number(node.sourceOrder) || 0,
         sourceCommitIndex: Number(node.sourceCommitIndex) || 0,
@@ -557,6 +578,58 @@ function buildAuthorRows(
   });
 }
 
+function classifyRepoBattleGroup(repoName = '') {
+  const normalized = String(repoName || '').toLowerCase();
+  if (normalized.includes('server') || normalized.includes('back')) {
+    return 'backend';
+  }
+  if (
+    normalized.includes('front')
+    || normalized.includes('mobile')
+    || normalized.includes('pc')
+  ) {
+    return 'frontend';
+  }
+  return 'other';
+}
+
+function buildRepoBattleRows(
+  nodes,
+  metric,
+  subtractDeletions = false,
+  excludedCommitIds = null,
+  initialTotalsByGroupId = null
+) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return [];
+  }
+
+  const totalsByGroupId = Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [
+    series.id,
+    Number(initialTotalsByGroupId?.[series.id]) || 0,
+  ]));
+
+  return nodes.map((node, index) => {
+    if (!excludedCommitIds?.has(node.id)) {
+      const delta = trendDelta(node, metric, subtractDeletions);
+      const groupId = classifyRepoBattleGroup(node.repoName);
+      totalsByGroupId[groupId] += delta;
+    }
+
+    const row = {
+      index,
+      timestampMs: Number(node.timestampMs) || 0,
+      label: formatKoreanDateTime(node.timestampMs),
+      shortLabel: formatBattleMomentShort(node.timestampMs),
+    };
+
+    for (const series of REPO_BATTLE_SERIES) {
+      row[series.key] = Number(totalsByGroupId[series.id]) || 0;
+    }
+    return row;
+  });
+}
+
 function toNumericInputValue(rawValue) {
   if (rawValue === '' || rawValue === null || rawValue === undefined) {
     return '';
@@ -761,7 +834,6 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
-  const showTeamAreaPercent = true;
   const [includePreTimelinePrep, setIncludePreTimelinePrep] = useState(false);
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
   const [excludeZeroLengthCommit, setExcludeZeroLengthCommit] = useState(false);
@@ -1115,8 +1187,14 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       setActiveTrendIndex(null);
       return;
     }
-    setActiveTrendIndex(activeTrendRows.length - 1);
-  }, [activeTrendRows]);
+    setActiveTrendIndex((prev) => {
+      const fallbackIndex = activeTrendRows.length - 1;
+      if (!Number.isInteger(prev)) {
+        return fallbackIndex;
+      }
+      return Math.max(0, Math.min(fallbackIndex, prev));
+    });
+  }, [activeTrendRows.length]);
 
   const activeMoment = useMemo(() => {
     if (!activeTrendRows.length) {
@@ -1248,49 +1326,56 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
     : formatNumber;
 
-  const teamAreaSeries = useMemo(
-    () => activeTeamTotalSeries.map((series) => ({
-      ...series,
-      label: teamById.get(series.teamId)?.label ?? series.label,
-    })),
-    [activeTeamTotalSeries, teamById]
-  );
-
-  const teamAreaSeriesByKey = useMemo(
-    () => Object.fromEntries(teamAreaSeries.map((series) => [series.key, series])),
-    [teamAreaSeries]
-  );
-
-  const teamAreaRows = useMemo(() => {
-    if (!activeTrendRows.length || !teamAreaSeries.length) {
-      return [];
+  const preTimelineRepoBattleTotals = useMemo(() => {
+    if (!includePreTimelinePrep) {
+      return null;
     }
-    return activeTrendRows.map((row, index) => {
-      const lineRow = {
-        index,
-        timestampMs: Number(row.timestampMs) || 0,
-        label: formatKoreanDateTime(row.timestampMs),
-        shortLabel: formatBattleMomentShort(row.timestampMs),
-      };
-
-      const rawValues = teamAreaSeries.map((series) => Number(row[series.key]) || 0);
-      const denominator = rawValues.reduce((sum, value) => sum + Math.abs(value), 0);
-
-      for (const series of teamAreaSeries) {
-        const value = Number(row[series.key]) || 0;
-        lineRow[series.key] = denominator > 0 ? (value / denominator) * 100 : 0;
+    const totalsByGroupId = Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [series.id, 0]));
+    for (const node of preTimelineNodes) {
+      if (activeExcludedCommitIds?.has(node.id)) {
+        continue;
       }
-      return lineRow;
-    });
-  }, [activeTrendRows, teamAreaSeries]);
+      const delta = trendDelta(node, metricForTrend, useNetLines);
+      const groupId = classifyRepoBattleGroup(node.repoName);
+      totalsByGroupId[groupId] += delta;
+    }
+    return totalsByGroupId;
+  }, [
+    includePreTimelinePrep,
+    preTimelineNodes,
+    activeExcludedCommitIds,
+    metricForTrend,
+    useNetLines,
+  ]);
 
-  const teamAreaDomain = useMemo(
-    () => buildSeriesValueBounds(teamAreaRows, teamAreaSeries),
-    [teamAreaRows, teamAreaSeries]
+  const repoBattleRows = useMemo(
+    () => buildRepoBattleRows(
+      timelineWindowNodes,
+      metricForTrend,
+      useNetLines,
+      activeExcludedCommitIds,
+      preTimelineRepoBattleTotals
+    ),
+    [
+      timelineWindowNodes,
+      metricForTrend,
+      useNetLines,
+      activeExcludedCommitIds,
+      preTimelineRepoBattleTotals,
+    ]
   );
 
-  const teamAreaValueFormatter = (value) => Number(value || 0)
-    .toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const repoBattleSeriesByKey = useMemo(
+    () => Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [series.key, series])),
+    []
+  );
+
+  const repoBattleDomain = useMemo(
+    () => buildSeriesValueBounds(repoBattleRows, REPO_BATTLE_SERIES),
+    [repoBattleRows]
+  );
+
+  const repoBattleValueFormatter = formatNumber;
 
   const dialWindowText = useMemo(
     () => `${formatKoreanDateTime(BATTLE_TIMELINE_START_MS)} ~ ${formatKoreanDateTime(BATTLE_TIMELINE_END_MS)}`,
@@ -1348,7 +1433,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const trendDescription = showProjectPercent
     ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 팀별 영역 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 영역: 전체 대비(%), 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
+    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 레포 3진영 꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1600,37 +1685,31 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
                   <div className="battle-team-chart-block">
                     <Group justify="space-between" align="center" mb={4}>
-                      <Text size="xs" c="dimmed" fw={700}>팀 추이 영역</Text>
-                      <Text size="xs" c="dimmed">전체 대비(%)</Text>
+                      <Text size="xs" c="dimmed" fw={700}>레포 3진영 꺾은선</Text>
+                      <Text size="xs" c="dimmed">백엔드 vs 프런트 vs 기타</Text>
                     </Group>
-                    {teamAreaSeries.length === 0 ? (
-                      <Text size="sm" c="dimmed">해당 시점의 팀 데이터가 없습니다.</Text>
+                    {repoBattleRows.length === 0 ? (
+                      <Text size="sm" c="dimmed">해당 시점의 레포 데이터가 없습니다.</Text>
                     ) : (
                       <div className="battle-team-line-wrap">
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart
-                            data={teamAreaRows}
-                            stackOffset="sign"
+                          <LineChart
+                            data={repoBattleRows}
                             margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
                           >
                             <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                             <XAxis
                               dataKey="index"
                               interval="preserveStartEnd"
-                              tickFormatter={(value) => teamAreaRows[value]?.shortLabel ?? ''}
+                              tickFormatter={(value) => repoBattleRows[value]?.shortLabel ?? ''}
                               minTickGap={18}
                               tick={{ fill: chartTickColor, fontSize: 11 }}
                               axisLine={{ stroke: chartAxisStroke }}
                               tickLine={{ stroke: chartAxisStroke }}
                             />
                             <YAxis
-                              allowDecimals={showTeamAreaPercent}
-                              domain={teamAreaDomain}
-                              tickFormatter={
-                                showTeamAreaPercent
-                                  ? (value) => `${Math.round(Number(value) || 0)}%`
-                                  : undefined
-                              }
+                              allowDecimals={false}
+                              domain={repoBattleDomain}
                               tick={{ fill: chartTickColor, fontSize: 11 }}
                               axisLine={{ stroke: chartAxisStroke }}
                               tickLine={{ stroke: chartAxisStroke }}
@@ -1638,34 +1717,31 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                             {Number.isFinite(activeLineMarkerIndex) && (
                               <ReferenceLine x={activeLineMarkerIndex} stroke={chartReferenceStroke} strokeWidth={1.6} />
                             )}
-                            {(useNetLines || teamAreaDomain[0] < 0) && (
+                            {(useNetLines || repoBattleDomain[0] < 0) && (
                               <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                             )}
                             <Tooltip
                               content={
                                 <TeamLineTooltip
-                                  seriesByKey={teamAreaSeriesByKey}
-                                  valueFormatter={teamAreaValueFormatter}
-                                  showPercent={showTeamAreaPercent}
+                                  seriesByKey={repoBattleSeriesByKey}
+                                  valueFormatter={repoBattleValueFormatter}
+                                  showPercent={false}
                                 />
                               }
                             />
-                            {teamAreaSeries.map((series) => (
-                              <Area
-                                key={`team-area-${series.teamId}`}
+                            {REPO_BATTLE_SERIES.map((series) => (
+                              <Line
+                                key={`repo-battle-line-${series.id}`}
                                 type="monotone"
                                 dataKey={series.key}
-                                stackId={`team-area-${metricMode}`}
                                 stroke={series.stroke}
-                                fill={withAlpha(series.stroke, 0.26)}
-                                strokeWidth={1.6}
-                                fillOpacity={1}
+                                strokeWidth={2}
                                 dot={false}
-                                activeDot={false}
+                                activeDot={{ r: 4 }}
                                 isAnimationActive={false}
                               />
                             ))}
-                          </AreaChart>
+                          </LineChart>
                         </ResponsiveContainer>
                       </div>
                     )}
