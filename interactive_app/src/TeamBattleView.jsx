@@ -9,6 +9,7 @@ import {
   Loader,
   NumberInput,
   Paper,
+  Select,
   Slider,
   Stack,
   Text,
@@ -67,6 +68,11 @@ const REPO_BATTLE_SERIES = [
     label: '프런트',
     stroke: '#1d4ed8',
   },
+];
+const TOP_REPO_LINE_LIMIT = 5;
+const RIGHT_CHART_MODE_OPTIONS = [
+  { value: 'repo_rank', label: '레포 순위' },
+  { value: 'repo_battle', label: '프런트 vs 백엔드' },
 ];
 
 function resolveAppAssetUrl(relativePath) {
@@ -921,6 +927,23 @@ function TeamLineTooltip({
   );
 }
 
+function SeriesLegendBoxes({ series = [] }) {
+  if (!Array.isArray(series) || series.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="battle-series-legend">
+      {series.map((item) => (
+        <div key={`legend-${item.key}`} className="battle-series-box">
+          <span className="swatch" style={{ backgroundColor: item.stroke }} aria-hidden="true" />
+          <Text size="xs" fw={700}>{item.label}</Text>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function TeamBattleView({ colorScheme = 'light' }) {
   const [teamPayloads, setTeamPayloads] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -932,7 +955,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   );
   const [logFiles, setLogFiles] = useState([]);
 
-  const [entityMode, setEntityMode] = useState('user');
+  const [rightChartMode, setRightChartMode] = useState('repo_rank');
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
   const [includePreTimelinePrep, setIncludePreTimelinePrep] = useState(false);
@@ -1315,28 +1338,22 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     ]
   );
 
-  const activeContributorRows = entityMode === 'repo' ? repoRows : authorRows;
-
   const activeTrendRows = useMemo(() => {
-    if (!teamRows.length && !activeContributorRows.length) {
+    const rowGroups = [teamRows, authorRows, repoRows].filter((rows) => rows.length > 0);
+    if (!rowGroups.length) {
       return [];
     }
-    if (!teamRows.length) {
-      return activeContributorRows;
-    }
-    if (!activeContributorRows.length) {
-      return teamRows;
-    }
-    const rowCount = Math.min(teamRows.length, activeContributorRows.length);
+    const rowCount = Math.min(...rowGroups.map((rows) => rows.length));
     const rows = [];
     for (let index = 0; index < rowCount; index += 1) {
-      rows.push({
-        ...teamRows[index],
-        ...activeContributorRows[index],
-      });
+      const mergedRow = {};
+      for (const sourceRows of rowGroups) {
+        Object.assign(mergedRow, sourceRows[index]);
+      }
+      rows.push(mergedRow);
     }
     return rows;
-  }, [teamRows, activeContributorRows]);
+  }, [teamRows, authorRows, repoRows]);
 
   useEffect(() => {
     if (!activeTrendRows.length) {
@@ -1416,19 +1433,18 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [teamTotalSeries, activeTeamIds]
   );
 
-  const activeEntitySeries = useMemo(
-    () => (entityMode === 'repo' ? repoSeries : authorSeries),
-    [entityMode, repoSeries, authorSeries]
+  const rankingEntitySeries = repoSeries;
+
+  const rankingTeamEntitySeries = useMemo(
+    () => rankingEntitySeries.filter((entity) => activeTeamIds.has(entity.teamId)),
+    [rankingEntitySeries, activeTeamIds]
   );
 
-  const activeTeamEntitySeries = useMemo(
-    () => activeEntitySeries.filter((entity) => activeTeamIds.has(entity.teamId)),
-    [activeEntitySeries, activeTeamIds]
-  );
+  const rightChartTeamEntitySeries = rankingTeamEntitySeries;
 
-  const entityByKey = useMemo(
-    () => Object.fromEntries(activeTeamEntitySeries.map((entity) => [entity.key, entity])),
-    [activeTeamEntitySeries]
+  const rightChartEntityByKey = useMemo(
+    () => Object.fromEntries(rightChartTeamEntitySeries.map((entity) => [entity.key, entity])),
+    [rightChartTeamEntitySeries]
   );
 
   const rankingRows = useMemo(() => {
@@ -1436,7 +1452,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     if (!row) {
       return [];
     }
-    return activeTeamEntitySeries
+    return rankingTeamEntitySeries
       .map((series) => {
         const signedValue = Number(row[series.key]) || 0;
         const team = teamById.get(series.teamId);
@@ -1449,7 +1465,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       })
       .filter((item) => item.magnitude > 0)
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, activeTeamEntitySeries, teamById]);
+  }, [activeMoment, rankingTeamEntitySeries, teamById]);
 
   const teamStackRows = useMemo(() => {
     const row = activeMoment?.row;
@@ -1464,7 +1480,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         total: 0,
       };
 
-      for (const entity of activeTeamEntitySeries) {
+      for (const entity of rightChartTeamEntitySeries) {
         const value = entity.teamId === teamSeries.teamId
           ? (Number(row[entity.key]) || 0)
           : 0;
@@ -1474,9 +1490,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
       return stackRow;
     });
-  }, [activeMoment, activeTeamTotalSeries, activeTeamEntitySeries, teamById]);
+  }, [activeMoment, activeTeamTotalSeries, rightChartTeamEntitySeries, teamById]);
 
-  const teamStackSeries = activeTeamEntitySeries;
+  const teamStackSeries = rightChartTeamEntitySeries;
 
   const teamStackDomain = useMemo(
     () => buildStackValueBounds(teamStackRows, teamStackSeries),
@@ -1546,43 +1562,46 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [repoBattleRows]
   );
 
-  const userLineSeries = useMemo(() => {
-    if (!authorRows.length) {
+  const repoLineSeries = useMemo(() => {
+    if (!repoRows.length) {
       return [];
     }
-    const lastRow = authorRows[authorRows.length - 1];
-    return authorSeries
+    const lastRow = repoRows[repoRows.length - 1];
+    return repoSeries
       .map((series) => ({
         ...series,
         magnitude: Math.abs(Number(lastRow?.[series.key]) || 0),
       }))
       .filter((series) => series.magnitude > 0 && activeTeamIds.has(series.teamId))
       .sort((a, b) => b.magnitude - a.magnitude)
-      .slice(0, 8);
-  }, [authorRows, authorSeries, activeTeamIds]);
+      .slice(0, TOP_REPO_LINE_LIMIT);
+  }, [repoRows, repoSeries, activeTeamIds]);
 
-  const userLineSeriesByKey = useMemo(
-    () => Object.fromEntries(userLineSeries.map((series) => [series.key, series])),
-    [userLineSeries]
+  const repoLineSeriesByKey = useMemo(
+    () => Object.fromEntries(repoLineSeries.map((series) => [series.key, series])),
+    [repoLineSeries]
   );
 
-  const userLineDomain = useMemo(
-    () => buildSeriesValueBounds(authorRows, userLineSeries),
-    [authorRows, userLineSeries]
+  const repoLineDomain = useMemo(
+    () => buildSeriesValueBounds(repoRows, repoLineSeries),
+    [repoRows, repoLineSeries]
   );
 
-  const lineChartRows = entityMode === 'repo' ? repoBattleRows : authorRows;
-  const lineChartSeries = entityMode === 'repo' ? REPO_BATTLE_SERIES : userLineSeries;
-  const lineChartSeriesByKey = entityMode === 'repo' ? repoBattleSeriesByKey : userLineSeriesByKey;
-  const lineChartDomain = entityMode === 'repo' ? repoBattleDomain : userLineDomain;
+  const isRepoBattleMode = rightChartMode === 'repo_battle';
+  const lineChartRows = isRepoBattleMode ? repoBattleRows : repoRows;
+  const lineChartSeries = isRepoBattleMode ? REPO_BATTLE_SERIES : repoLineSeries;
+  const lineChartSeriesByKey = isRepoBattleMode ? repoBattleSeriesByKey : repoLineSeriesByKey;
+  const lineChartDomain = isRepoBattleMode ? repoBattleDomain : repoLineDomain;
   const lineChartValueFormatter = formatNumber;
-  const lineChartTitle = entityMode === 'repo' ? '레포 2진영 꺾은선' : '사용자 누적 꺾은선';
-  const lineChartHint = entityMode === 'repo'
-    ? '백엔드 vs 프런트'
-    : `상위 ${Math.min(8, userLineSeries.length)}명 누적 추이`;
-  const lineChartEmptyText = entityMode === 'repo'
-    ? '해당 시점의 레포 데이터가 없습니다.'
-    : '해당 시점의 사용자 데이터가 없습니다.';
+  const lineChartTitle = isRepoBattleMode
+    ? '프런트 vs 백엔드 누적 추이'
+    : `상위 ${TOP_REPO_LINE_LIMIT}개 레포 누적 추이`;
+  const lineChartHint = isRepoBattleMode
+    ? '레포명을 기준으로 프런트/백엔드로 분류한 누적 추이'
+    : `상위 ${Math.min(TOP_REPO_LINE_LIMIT, repoLineSeries.length)}개 레포 누적 추이`;
+  const lineChartEmptyText = isRepoBattleMode
+    ? '프런트/백엔드 분류 레포 데이터가 없습니다.'
+    : '해당 시점의 레포 데이터가 없습니다.';
   const hasLineChartData = lineChartRows.length > 0 && lineChartSeries.length > 0;
   const hasNegativeLineValue = lineChartDomain[0] < 0;
 
@@ -1638,12 +1657,13 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     );
   }, []);
 
-  const trendTargetLabel = entityMode === 'repo' ? '레포' : '사용자';
+  const trendTargetLabel = '레포';
+  const rightChartTargetLabel = isRepoBattleMode ? '프런트 vs 백엔드' : '레포 순위';
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} ${trendTargetLabel} 기준 배틀 추이`;
 
   const trendDescription = showProjectPercent
-    ? `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 팀 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 팀 막대/꺾은선 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
+    ? `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 우측 그래프(${rightChartTargetLabel})를 동시에 비교합니다. (${dialWindowText})`
+    : `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 우측 그래프(${rightChartTargetLabel})를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1675,24 +1695,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             </Stack>
             <Group gap="xs" className="battle-control-group">
               <Group gap={6} wrap="nowrap">
-                <Button
-                  size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={entityMode === 'user' ? 'filled' : 'default'}
-                  onClick={() => setEntityMode('user')}
-                >
-                  사용자
-                </Button>
-                <Button
-                  size="xs"
-                  color={actionButtonColor}
-                  radius={0}
-                  variant={entityMode === 'repo' ? 'filled' : 'default'}
-                  onClick={() => setEntityMode('repo')}
-                >
-                  레포
-                </Button>
+                <Text size="xs" c="dimmed" fw={700}>랭킹 기준: 레포</Text>
               </Group>
               <Group gap={6} wrap="nowrap">
                 <Button
@@ -1811,9 +1814,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             <Paper withBorder radius="md" p="sm" className="battle-ranking-panel">
               <Group justify="space-between" align="center" mb={8}>
                 <Text size="xs" c="dimmed" tt="uppercase" fw={700}>
-                  {entityMode === 'repo' ? '레포 랭킹' : '사용자 랭킹'}
+                  레포 랭킹
                 </Text>
-                <Badge color="gray" variant="light">{rankingRows.length}{entityMode === 'repo' ? '개' : '명'}</Badge>
+                <Badge color="gray" variant="light">{rankingRows.length}개</Badge>
               </Group>
               <div className="battle-ranking-list">
                 {rankingRows.map((item, index) => (
@@ -1840,7 +1843,18 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             <Paper withBorder radius="md" p="sm" className="battle-rect-panel">
               <Group justify="space-between" align="center" mb={8}>
                 <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀 막대/꺾은선 그래프</Text>
-                <Badge color="gray" variant="light">{activeTeamTotalSeries.length}개 팀</Badge>
+                <Group gap={8} wrap="nowrap">
+                  <Select
+                    size="xs"
+                    w={180}
+                    data={RIGHT_CHART_MODE_OPTIONS}
+                    value={rightChartMode}
+                    onChange={(value) => setRightChartMode(value === 'repo_battle' ? 'repo_battle' : 'repo_rank')}
+                    allowDeselect={false}
+                    aria-label="우측 그래프 기준"
+                  />
+                  <Badge color="gray" variant="light">{activeTeamTotalSeries.length}개 팀</Badge>
+                </Group>
               </Group>
               {activeTeamTotalSeries.length === 0 ? (
                 <Text size="sm" c="dimmed">
@@ -1849,9 +1863,6 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
               ) : (
                 <div className="battle-team-visual-layout">
                   <div className="battle-team-chart-block">
-                    <Text size="xs" c="dimmed" fw={700} mb={4}>
-                      스택 막대 ({entityMode === 'repo' ? '레포' : '사용자'} 기준)
-                    </Text>
                     <div className="battle-team-bar-wrap">
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart
@@ -1888,7 +1899,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                           <Tooltip
                             content={
                               <TeamStackedTooltip
-                                seriesByKey={entityByKey}
+                                seriesByKey={rightChartEntityByKey}
                                 unitLabel={teamStackUnitLabel}
                                 valueFormatter={teamStackValueFormatter}
                               />
@@ -1924,6 +1935,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                       <Text size="xs" c="dimmed" fw={700}>{lineChartTitle}</Text>
                       <Text size="xs" c="dimmed">{lineChartHint}</Text>
                     </Group>
+                    <SeriesLegendBoxes series={lineChartSeries} />
                     {!hasLineChartData ? (
                       <Text size="sm" c="dimmed">{lineChartEmptyText}</Text>
                     ) : (

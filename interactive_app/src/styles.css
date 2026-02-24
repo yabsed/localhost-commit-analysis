@@ -204,6 +204,23 @@ body {
   flex-direction: column;
 }
 
+.battle-series-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.battle-series-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  background: var(--surface-card);
+}
+
 .left-pane,
 .right-pane {
   min-height: 0;
