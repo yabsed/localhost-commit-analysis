@@ -70,10 +70,15 @@ const REPO_BATTLE_SERIES = [
     stroke: '#1d4ed8',
   },
 ];
-const TOP_REPO_LINE_LIMIT = 5;
+const TOP_REPO_LINE_LIMIT = 8;
+const BOTTOM_REPO_LINE_LIMIT = 8;
 const RIGHT_CHART_MODE_OPTIONS = [
   { value: 'repo_rank', label: '레포 순위' },
   { value: 'repo_battle', label: '프런트 vs 백엔드' },
+];
+const REPO_RANK_LINE_VIEW_OPTIONS = [
+  { value: 'top', label: '상위 8개' },
+  { value: 'bottom', label: '하위 8개' },
 ];
 
 function resolveAppAssetUrl(relativePath) {
@@ -960,6 +965,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const [entityMode, setEntityMode] = useState('repo');
   const [rightChartMode, setRightChartMode] = useState('repo_rank');
+  const [repoRankLineView, setRepoRankLineView] = useState('top');
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
   const [includePreTimelinePrep, setIncludePreTimelinePrep] = useState(false);
@@ -1610,7 +1616,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [repoBattleRows]
   );
 
-  const repoLineSeries = useMemo(() => {
+  const repoRankMagnitudeSeries = useMemo(() => {
     if (!repoRows.length) {
       return [];
     }
@@ -1621,32 +1627,64 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
         magnitude: Math.abs(Number(lastRow?.[series.key]) || 0),
       }))
       .filter((series) => series.magnitude > 0 && activeTeamIds.has(series.teamId))
-      .sort((a, b) => b.magnitude - a.magnitude)
-      .slice(0, TOP_REPO_LINE_LIMIT);
+      .sort((a, b) => b.magnitude - a.magnitude);
   }, [repoRows, repoSeries, activeTeamIds]);
 
-  const repoLineSeriesByKey = useMemo(
-    () => Object.fromEntries(repoLineSeries.map((series) => [series.key, series])),
-    [repoLineSeries]
+  const topRepoLineSeries = useMemo(
+    () => repoRankMagnitudeSeries.slice(0, TOP_REPO_LINE_LIMIT),
+    [repoRankMagnitudeSeries]
   );
 
-  const repoLineDomain = useMemo(
-    () => buildSeriesValueBounds(repoRows, repoLineSeries),
-    [repoRows, repoLineSeries]
+  const bottomRepoLineSeries = useMemo(
+    () => [...repoRankMagnitudeSeries]
+      .sort((a, b) => a.magnitude - b.magnitude || a.label.localeCompare(b.label))
+      .slice(0, BOTTOM_REPO_LINE_LIMIT),
+    [repoRankMagnitudeSeries]
+  );
+
+  const topRepoLineSeriesByKey = useMemo(
+    () => Object.fromEntries(topRepoLineSeries.map((series) => [series.key, series])),
+    [topRepoLineSeries]
+  );
+
+  const bottomRepoLineSeriesByKey = useMemo(
+    () => Object.fromEntries(bottomRepoLineSeries.map((series) => [series.key, series])),
+    [bottomRepoLineSeries]
+  );
+
+  const topRepoLineDomain = useMemo(
+    () => buildSeriesValueBounds(repoRows, topRepoLineSeries),
+    [repoRows, topRepoLineSeries]
+  );
+
+  const bottomRepoLineDomain = useMemo(
+    () => buildSeriesValueBounds(repoRows, bottomRepoLineSeries),
+    [repoRows, bottomRepoLineSeries]
   );
 
   const isRepoBattleMode = rightChartMode === 'repo_battle';
+  const isRepoRankBottomView = !isRepoBattleMode && repoRankLineView === 'bottom';
+  const repoRankLineSeries = isRepoRankBottomView ? bottomRepoLineSeries : topRepoLineSeries;
+  const repoRankLineSeriesByKey = isRepoRankBottomView ? bottomRepoLineSeriesByKey : topRepoLineSeriesByKey;
+  const repoRankLineDomain = isRepoRankBottomView ? bottomRepoLineDomain : topRepoLineDomain;
+  const repoRankLineTitle = isRepoRankBottomView
+    ? `하위 ${BOTTOM_REPO_LINE_LIMIT}개 레포 누적 추이`
+    : `상위 ${TOP_REPO_LINE_LIMIT}개 레포 누적 추이`;
+  const repoRankLineHint = isRepoRankBottomView
+    ? `하위 ${Math.min(BOTTOM_REPO_LINE_LIMIT, bottomRepoLineSeries.length)}개 레포 누적 추이`
+    : `상위 ${Math.min(TOP_REPO_LINE_LIMIT, topRepoLineSeries.length)}개 레포 누적 추이`;
+
   const lineChartRows = isRepoBattleMode ? repoBattleRows : repoRows;
-  const lineChartSeries = isRepoBattleMode ? REPO_BATTLE_SERIES : repoLineSeries;
-  const lineChartSeriesByKey = isRepoBattleMode ? repoBattleSeriesByKey : repoLineSeriesByKey;
-  const lineChartDomain = isRepoBattleMode ? repoBattleDomain : repoLineDomain;
+  const lineChartSeries = isRepoBattleMode ? REPO_BATTLE_SERIES : repoRankLineSeries;
+  const lineChartSeriesByKey = isRepoBattleMode ? repoBattleSeriesByKey : repoRankLineSeriesByKey;
+  const lineChartDomain = isRepoBattleMode ? repoBattleDomain : repoRankLineDomain;
   const lineChartValueFormatter = formatNumber;
   const lineChartTitle = isRepoBattleMode
     ? '프런트 vs 백엔드 누적 추이'
-    : `상위 ${TOP_REPO_LINE_LIMIT}개 레포 누적 추이`;
+    : repoRankLineTitle;
   const lineChartHint = isRepoBattleMode
     ? '레포명을 기준으로 프런트/백엔드로 분류한 누적 추이'
-    : `상위 ${Math.min(TOP_REPO_LINE_LIMIT, repoLineSeries.length)}개 레포 누적 추이`;
+    : repoRankLineHint;
   const lineChartEmptyText = isRepoBattleMode
     ? '프런트/백엔드 분류 레포 데이터가 없습니다.'
     : '해당 시점의 레포 데이터가 없습니다.';
@@ -1934,6 +1972,17 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                     allowDeselect={false}
                     aria-label="우측 그래프 기준"
                   />
+                  {rightChartMode === 'repo_rank' && (
+                    <Select
+                      size="xs"
+                      w={122}
+                      data={REPO_RANK_LINE_VIEW_OPTIONS}
+                      value={repoRankLineView}
+                      onChange={(value) => setRepoRankLineView(value === 'bottom' ? 'bottom' : 'top')}
+                      allowDeselect={false}
+                      aria-label="레포 누적 추이 구분"
+                    />
+                  )}
                   <Badge color="gray" variant="light">{activeTeamTotalSeries.length}개 팀</Badge>
                 </Group>
               </Group>
