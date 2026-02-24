@@ -531,116 +531,6 @@ function buildPreparedTeamBattle(teamPayloads, identityPairs = []) {
   };
 }
 
-function buildTeamRows(
-  nodes,
-  teamTotalSeries,
-  metric,
-  subtractDeletions = false,
-  showPercent = false,
-  excludedCommitIds = null,
-  initialTotalsByTeamId = null
-) {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return [];
-  }
-
-  const totalsByTeamId = Object.fromEntries(teamTotalSeries.map((series) => [
-    series.id,
-    Number(initialTotalsByTeamId?.[series.id]) || 0,
-  ]));
-
-  return nodes.map((node, index) => {
-    if (!excludedCommitIds?.has(node.id)) {
-      const delta = trendDelta(node, metric, subtractDeletions);
-      if (Object.prototype.hasOwnProperty.call(totalsByTeamId, node.teamId)) {
-        totalsByTeamId[node.teamId] += delta;
-      }
-    }
-
-    const row = {
-      index,
-      timestampMs: Number(node.timestampMs) || 0,
-      label: formatKoreanDateTime(node.timestampMs),
-      shortLabel: formatBattleMomentShort(node.timestampMs),
-    };
-
-    if (!showPercent) {
-      for (const series of teamTotalSeries) {
-        row[series.key] = Number(totalsByTeamId[series.id]) || 0;
-      }
-      return row;
-    }
-
-    const denominator = teamTotalSeries.reduce(
-      (sum, series) => sum + Math.abs(Number(totalsByTeamId[series.id]) || 0),
-      0
-    );
-
-    for (const series of teamTotalSeries) {
-      const value = Number(totalsByTeamId[series.id]) || 0;
-      row[series.key] = denominator > 0 ? (value / denominator) * 100 : 0;
-    }
-
-    return row;
-  });
-}
-
-function buildAuthorRows(
-  nodes,
-  authorSeries,
-  authorKeyById,
-  metric,
-  subtractDeletions = false,
-  showPercent = false,
-  excludedCommitIds = null,
-  initialTotalsByAuthorKey = null
-) {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return [];
-  }
-
-  const totalsByAuthorKey = Object.fromEntries(authorSeries.map((series) => [
-    series.key,
-    Number(initialTotalsByAuthorKey?.[series.key]) || 0,
-  ]));
-
-  return nodes.map((node, index) => {
-    if (!excludedCommitIds?.has(node.id)) {
-      const delta = trendDelta(node, metric, subtractDeletions);
-      const authorKey = authorKeyById.get(node.authorId);
-      if (authorKey && Object.prototype.hasOwnProperty.call(totalsByAuthorKey, authorKey)) {
-        totalsByAuthorKey[authorKey] += delta;
-      }
-    }
-
-    const row = {
-      index,
-      timestampMs: Number(node.timestampMs) || 0,
-      label: formatKoreanDateTime(node.timestampMs),
-      shortLabel: formatBattleMomentShort(node.timestampMs),
-    };
-
-    if (!showPercent) {
-      for (const series of authorSeries) {
-        row[series.key] = Number(totalsByAuthorKey[series.key]) || 0;
-      }
-      return row;
-    }
-
-    const denominator = authorSeries.reduce(
-      (sum, series) => sum + Math.abs(Number(totalsByAuthorKey[series.key]) || 0),
-      0
-    );
-
-    for (const series of authorSeries) {
-      const value = Number(totalsByAuthorKey[series.key]) || 0;
-      row[series.key] = denominator > 0 ? (value / denominator) * 100 : 0;
-    }
-
-    return row;
-  });
-}
-
 function classifyRepoBattleGroup(repoName = '') {
   const normalized = String(repoName || '').toLowerCase();
   if (normalized.includes('server') || normalized.includes('back')) {
@@ -656,99 +546,182 @@ function classifyRepoBattleGroup(repoName = '') {
   return null;
 }
 
-function buildRepoBattleRows(
-  nodes,
-  metric,
-  subtractDeletions = false,
-  excludedCommitIds = null,
-  initialTotalsByGroupId = null
-) {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return [];
-  }
-
-  const totalsByGroupId = Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [
-    series.id,
-    Number(initialTotalsByGroupId?.[series.id]) || 0,
-  ]));
-
-  return nodes.map((node, index) => {
-    if (!excludedCommitIds?.has(node.id)) {
-      const delta = trendDelta(node, metric, subtractDeletions);
-      const groupId = classifyRepoBattleGroup(node.repoName);
-      if (groupId && Object.prototype.hasOwnProperty.call(totalsByGroupId, groupId)) {
-        totalsByGroupId[groupId] += delta;
-      }
-    }
-
-    const row = {
-      index,
-      timestampMs: Number(node.timestampMs) || 0,
-      label: formatKoreanDateTime(node.timestampMs),
-      shortLabel: formatBattleMomentShort(node.timestampMs),
-    };
-
-    for (const series of REPO_BATTLE_SERIES) {
-      row[series.key] = Number(totalsByGroupId[series.id]) || 0;
-    }
-    return row;
-  });
-}
-
-function buildRepoRows(
-  nodes,
+function buildBattleRowsBundle({
+  timelineWindowNodes,
+  preTimelineNodes,
+  includePreTimelinePrep = false,
+  teamTotalSeries,
+  authorSeries,
+  authorKeyById,
   repoSeries,
   repoKeyById,
   metric,
   subtractDeletions = false,
   showPercent = false,
   excludedCommitIds = null,
-  initialTotalsByRepoKey = null
-) {
-  if (!Array.isArray(nodes) || nodes.length === 0) {
-    return [];
+  needAuthorRows = true,
+  needRepoRows = true,
+  needRepoBattleRows = true,
+}) {
+  const teamRows = [];
+  const authorRows = [];
+  const repoRows = [];
+  const repoBattleRows = [];
+  const activeTeamIds = new Set();
+
+  if (!Array.isArray(timelineWindowNodes) || timelineWindowNodes.length === 0) {
+    return {
+      teamRows,
+      authorRows,
+      repoRows,
+      repoBattleRows,
+      activeTeamIds,
+    };
   }
 
-  const totalsByRepoKey = Object.fromEntries(repoSeries.map((series) => [
-    series.key,
-    Number(initialTotalsByRepoKey?.[series.key]) || 0,
-  ]));
+  const teamTotalsById = Object.fromEntries(teamTotalSeries.map((series) => [series.id, 0]));
+  const authorTotalsByKey = needAuthorRows
+    ? Object.fromEntries(authorSeries.map((series) => [series.key, 0]))
+    : null;
+  const repoTotalsByKey = needRepoRows
+    ? Object.fromEntries(repoSeries.map((series) => [series.key, 0]))
+    : null;
+  const repoBattleTotalsById = needRepoBattleRows
+    ? Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [series.id, 0]))
+    : null;
 
-  return nodes.map((node, index) => {
-    if (!excludedCommitIds?.has(node.id)) {
-      const delta = trendDelta(node, metric, subtractDeletions);
-      const repoKey = repoKeyById.get(node.repoId);
-      if (repoKey && Object.prototype.hasOwnProperty.call(totalsByRepoKey, repoKey)) {
-        totalsByRepoKey[repoKey] += delta;
+  const applyNodeDelta = (node) => {
+    if (excludedCommitIds?.has(node.id)) {
+      return;
+    }
+
+    const delta = trendDelta(node, metric, subtractDeletions);
+    if (!Number.isFinite(delta) || delta === 0) {
+      return;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(teamTotalsById, node.teamId)) {
+      teamTotalsById[node.teamId] += delta;
+    }
+
+    if (authorTotalsByKey) {
+      const authorKey = authorKeyById.get(node.authorId);
+      if (authorKey && Object.prototype.hasOwnProperty.call(authorTotalsByKey, authorKey)) {
+        authorTotalsByKey[authorKey] += delta;
       }
     }
 
-    const row = {
+    if (repoTotalsByKey) {
+      const repoKey = repoKeyById.get(node.repoId);
+      if (repoKey && Object.prototype.hasOwnProperty.call(repoTotalsByKey, repoKey)) {
+        repoTotalsByKey[repoKey] += delta;
+      }
+    }
+
+    if (repoBattleTotalsById) {
+      const groupId = classifyRepoBattleGroup(node.repoName);
+      if (groupId && Object.prototype.hasOwnProperty.call(repoBattleTotalsById, groupId)) {
+        repoBattleTotalsById[groupId] += delta;
+      }
+    }
+  };
+
+  if (includePreTimelinePrep && Array.isArray(preTimelineNodes) && preTimelineNodes.length > 0) {
+    for (const node of preTimelineNodes) {
+      applyNodeDelta(node);
+    }
+  }
+
+  for (let index = 0; index < timelineWindowNodes.length; index += 1) {
+    const node = timelineWindowNodes[index];
+    applyNodeDelta(node);
+
+    const rowBase = {
       index,
       timestampMs: Number(node.timestampMs) || 0,
       label: formatKoreanDateTime(node.timestampMs),
       shortLabel: formatBattleMomentShort(node.timestampMs),
     };
 
+    const teamRow = { ...rowBase };
     if (!showPercent) {
-      for (const series of repoSeries) {
-        row[series.key] = Number(totalsByRepoKey[series.key]) || 0;
+      for (const series of teamTotalSeries) {
+        const value = Number(teamTotalsById[series.id]) || 0;
+        teamRow[series.key] = value;
+        if (Math.abs(value) > 0) {
+          activeTeamIds.add(series.id);
+        }
       }
-      return row;
+    } else {
+      const teamDenominator = teamTotalSeries.reduce(
+        (sum, series) => sum + Math.abs(Number(teamTotalsById[series.id]) || 0),
+        0
+      );
+      for (const series of teamTotalSeries) {
+        const value = Number(teamTotalsById[series.id]) || 0;
+        const percentValue = teamDenominator > 0 ? (value / teamDenominator) * 100 : 0;
+        teamRow[series.key] = percentValue;
+        if (Math.abs(percentValue) > 0) {
+          activeTeamIds.add(series.id);
+        }
+      }
+    }
+    teamRows.push(teamRow);
+
+    if (authorTotalsByKey) {
+      const authorRow = { ...rowBase };
+      if (!showPercent) {
+        for (const series of authorSeries) {
+          authorRow[series.key] = Number(authorTotalsByKey[series.key]) || 0;
+        }
+      } else {
+        const authorDenominator = authorSeries.reduce(
+          (sum, series) => sum + Math.abs(Number(authorTotalsByKey[series.key]) || 0),
+          0
+        );
+        for (const series of authorSeries) {
+          const value = Number(authorTotalsByKey[series.key]) || 0;
+          authorRow[series.key] = authorDenominator > 0 ? (value / authorDenominator) * 100 : 0;
+        }
+      }
+      authorRows.push(authorRow);
     }
 
-    const denominator = repoSeries.reduce(
-      (sum, series) => sum + Math.abs(Number(totalsByRepoKey[series.key]) || 0),
-      0
-    );
-
-    for (const series of repoSeries) {
-      const value = Number(totalsByRepoKey[series.key]) || 0;
-      row[series.key] = denominator > 0 ? (value / denominator) * 100 : 0;
+    if (repoTotalsByKey) {
+      const repoRow = { ...rowBase };
+      if (!showPercent) {
+        for (const series of repoSeries) {
+          repoRow[series.key] = Number(repoTotalsByKey[series.key]) || 0;
+        }
+      } else {
+        const repoDenominator = repoSeries.reduce(
+          (sum, series) => sum + Math.abs(Number(repoTotalsByKey[series.key]) || 0),
+          0
+        );
+        for (const series of repoSeries) {
+          const value = Number(repoTotalsByKey[series.key]) || 0;
+          repoRow[series.key] = repoDenominator > 0 ? (value / repoDenominator) * 100 : 0;
+        }
+      }
+      repoRows.push(repoRow);
     }
 
-    return row;
-  });
+    if (repoBattleTotalsById) {
+      const repoBattleRow = { ...rowBase };
+      for (const series of REPO_BATTLE_SERIES) {
+        repoBattleRow[series.key] = Number(repoBattleTotalsById[series.id]) || 0;
+      }
+      repoBattleRows.push(repoBattleRow);
+    }
+  }
+
+  return {
+    teamRows,
+    authorRows,
+    repoRows,
+    repoBattleRows,
+    activeTeamIds,
+  };
 }
 
 function toNumericInputValue(rawValue) {
@@ -1280,201 +1253,85 @@ export default function TeamBattleView({
     [nodes]
   );
 
-  const preTimelineTeamTotals = useMemo(() => {
-    if (!includePreTimelinePrep) {
-      return null;
-    }
+  const needAuthorRows = entityMode === 'user';
+  const needRepoRows = entityMode === 'repo' || rightChartMode === 'repo_rank';
+  const needRepoBattleRows = rightChartMode === 'repo_battle';
 
-    const totalsByTeamId = Object.fromEntries(teamTotalSeries.map((series) => [series.id, 0]));
-    for (const node of preTimelineNodes) {
-      if (activeExcludedCommitIds?.has(node.id)) {
-        continue;
-      }
-      const delta = trendDelta(node, metricForTrend, useNetLines);
-      if (Object.prototype.hasOwnProperty.call(totalsByTeamId, node.teamId)) {
-        totalsByTeamId[node.teamId] += delta;
-      }
-    }
-    return totalsByTeamId;
-  }, [
-    includePreTimelinePrep,
-    teamTotalSeries,
-    preTimelineNodes,
-    activeExcludedCommitIds,
-    metricForTrend,
-    useNetLines,
-  ]);
-
-  const preTimelineAuthorTotals = useMemo(() => {
-    if (!includePreTimelinePrep) {
-      return null;
-    }
-
-    const totalsByAuthorKey = Object.fromEntries(authorSeries.map((series) => [series.key, 0]));
-    for (const node of preTimelineNodes) {
-      if (activeExcludedCommitIds?.has(node.id)) {
-        continue;
-      }
-      const authorKey = authorKeyById.get(node.authorId);
-      if (!authorKey || !Object.prototype.hasOwnProperty.call(totalsByAuthorKey, authorKey)) {
-        continue;
-      }
-      const delta = trendDelta(node, metricForTrend, useNetLines);
-      totalsByAuthorKey[authorKey] += delta;
-    }
-    return totalsByAuthorKey;
-  }, [
-    includePreTimelinePrep,
-    authorSeries,
-    authorKeyById,
-    preTimelineNodes,
-    activeExcludedCommitIds,
-    metricForTrend,
-    useNetLines,
-  ]);
-
-  const preTimelineRepoTotals = useMemo(() => {
-    if (!includePreTimelinePrep) {
-      return null;
-    }
-
-    const totalsByRepoKey = Object.fromEntries(repoSeries.map((series) => [series.key, 0]));
-    for (const node of preTimelineNodes) {
-      if (activeExcludedCommitIds?.has(node.id)) {
-        continue;
-      }
-      const repoKey = repoKeyById.get(node.repoId);
-      if (!repoKey || !Object.prototype.hasOwnProperty.call(totalsByRepoKey, repoKey)) {
-        continue;
-      }
-      const delta = trendDelta(node, metricForTrend, useNetLines);
-      totalsByRepoKey[repoKey] += delta;
-    }
-    return totalsByRepoKey;
-  }, [
-    includePreTimelinePrep,
-    repoSeries,
-    repoKeyById,
-    preTimelineNodes,
-    activeExcludedCommitIds,
-    metricForTrend,
-    useNetLines,
-  ]);
-
-  const teamRows = useMemo(
-    () => buildTeamRows(
+  const battleRowsBundle = useMemo(
+    () => buildBattleRowsBundle({
       timelineWindowNodes,
+      preTimelineNodes,
+      includePreTimelinePrep,
       teamTotalSeries,
-      metricForTrend,
-      useNetLines,
-      showProjectPercent,
-      activeExcludedCommitIds,
-      preTimelineTeamTotals
-    ),
-    [
-      timelineWindowNodes,
-      teamTotalSeries,
-      metricForTrend,
-      useNetLines,
-      showProjectPercent,
-      activeExcludedCommitIds,
-      preTimelineTeamTotals,
-    ]
-  );
-
-  const authorRows = useMemo(
-    () => buildAuthorRows(
-      timelineWindowNodes,
       authorSeries,
       authorKeyById,
-      metricForTrend,
-      useNetLines,
-      showProjectPercent,
-      activeExcludedCommitIds,
-      preTimelineAuthorTotals
-    ),
+      repoSeries,
+      repoKeyById,
+      metric: metricForTrend,
+      subtractDeletions: useNetLines,
+      showPercent: showProjectPercent,
+      excludedCommitIds: activeExcludedCommitIds,
+      needAuthorRows,
+      needRepoRows,
+      needRepoBattleRows,
+    }),
     [
       timelineWindowNodes,
+      preTimelineNodes,
+      includePreTimelinePrep,
+      teamTotalSeries,
       authorSeries,
       authorKeyById,
-      metricForTrend,
-      useNetLines,
-      showProjectPercent,
-      activeExcludedCommitIds,
-      preTimelineAuthorTotals,
-    ]
-  );
-
-  const repoRows = useMemo(
-    () => buildRepoRows(
-      timelineWindowNodes,
       repoSeries,
       repoKeyById,
       metricForTrend,
       useNetLines,
       showProjectPercent,
       activeExcludedCommitIds,
-      preTimelineRepoTotals
-    ),
-    [
-      timelineWindowNodes,
-      repoSeries,
-      repoKeyById,
-      metricForTrend,
-      useNetLines,
-      showProjectPercent,
-      activeExcludedCommitIds,
-      preTimelineRepoTotals,
+      needAuthorRows,
+      needRepoRows,
+      needRepoBattleRows,
     ]
   );
 
-  const activeTrendRows = useMemo(() => {
-    const rowGroups = [teamRows, authorRows, repoRows].filter((rows) => rows.length > 0);
-    if (!rowGroups.length) {
-      return [];
-    }
-    const rowCount = Math.min(...rowGroups.map((rows) => rows.length));
-    const rows = [];
-    for (let index = 0; index < rowCount; index += 1) {
-      const mergedRow = {};
-      for (const sourceRows of rowGroups) {
-        Object.assign(mergedRow, sourceRows[index]);
-      }
-      rows.push(mergedRow);
-    }
-    return rows;
-  }, [teamRows, authorRows, repoRows]);
+  const teamRows = battleRowsBundle.teamRows;
+  const authorRows = battleRowsBundle.authorRows;
+  const repoRows = battleRowsBundle.repoRows;
+  const repoBattleRows = battleRowsBundle.repoBattleRows;
+  const activeTeamIds = battleRowsBundle.activeTeamIds;
+  const timelineRows = teamRows;
 
   useEffect(() => {
-    if (!activeTrendRows.length) {
+    if (!timelineRows.length) {
       setActiveTrendIndex(null);
       return;
     }
     setActiveTrendIndex((prev) => {
-      const fallbackIndex = activeTrendRows.length - 1;
+      const fallbackIndex = timelineRows.length - 1;
       if (!Number.isInteger(prev)) {
         return fallbackIndex;
       }
       return Math.max(0, Math.min(fallbackIndex, prev));
     });
-  }, [activeTrendRows.length]);
+  }, [timelineRows.length]);
 
   const activeMoment = useMemo(() => {
-    if (!activeTrendRows.length) {
+    if (!timelineRows.length) {
       return null;
     }
-    const fallbackIndex = activeTrendRows.length - 1;
+    const fallbackIndex = timelineRows.length - 1;
     const resolvedIndex = Number.isInteger(activeTrendIndex)
       ? Math.max(0, Math.min(fallbackIndex, activeTrendIndex))
       : fallbackIndex;
+    const row = timelineRows[resolvedIndex];
     return {
       index: resolvedIndex,
-      row: activeTrendRows[resolvedIndex],
+      timestampMs: Number(row?.timestampMs) || 0,
     };
-  }, [activeTrendRows, activeTrendIndex]);
+  }, [timelineRows, activeTrendIndex]);
 
   const handleDialWheel = useCallback((event) => {
-    if (activeTrendRows.length <= 1) {
+    if (timelineRows.length <= 1) {
       return;
     }
     const targetElement = event?.target;
@@ -1496,27 +1353,16 @@ export default function TeamBattleView({
     const direction = delta > 0 ? 1 : -1;
     const step = Math.max(1, Math.round(Math.abs(delta) / 20));
     setActiveTrendIndex((prev) => {
-      const fallbackIndex = activeTrendRows.length - 1;
+      const fallbackIndex = timelineRows.length - 1;
       const currentIndex = Number.isInteger(prev) ? prev : fallbackIndex;
       return Math.max(0, Math.min(fallbackIndex, currentIndex + direction * step));
     });
-  }, [activeTrendRows.length]);
+  }, [timelineRows.length]);
 
   const teamById = useMemo(
     () => new Map(teams.map((team) => [team.id, team])),
     [teams]
   );
-
-  const activeTeamIds = useMemo(() => {
-    const ids = new Set();
-    for (const series of teamTotalSeries) {
-      const hasValue = teamRows.some((row) => Math.abs(Number(row[series.key]) || 0) > 0);
-      if (hasValue) {
-        ids.add(series.teamId);
-      }
-    }
-    return ids;
-  }, [teamRows, teamTotalSeries]);
 
   const activeTeamTotalSeries = useMemo(
     () => teamTotalSeries.filter((series) => activeTeamIds.has(series.teamId)),
@@ -1540,8 +1386,19 @@ export default function TeamBattleView({
     [rightChartTeamEntitySeries]
   );
 
+  const activeRankingRow = useMemo(() => {
+    if (!activeMoment) {
+      return null;
+    }
+    const rowIndex = Number(activeMoment.index) || 0;
+    if (entityMode === 'repo') {
+      return repoRows[rowIndex] ?? null;
+    }
+    return authorRows[rowIndex] ?? null;
+  }, [activeMoment, entityMode, repoRows, authorRows]);
+
   const rankingRows = useMemo(() => {
-    const row = activeMoment?.row;
+    const row = activeRankingRow;
     if (!row) {
       return [];
     }
@@ -1558,10 +1415,10 @@ export default function TeamBattleView({
       })
       .filter((item) => item.magnitude > 0)
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, rankingTeamEntitySeries, teamById]);
+  }, [activeRankingRow, rankingTeamEntitySeries, teamById]);
 
   const teamStackRows = useMemo(() => {
-    const row = activeMoment?.row;
+    const row = activeRankingRow;
     if (!row) {
       return [];
     }
@@ -1583,7 +1440,7 @@ export default function TeamBattleView({
 
       return stackRow;
     });
-  }, [activeMoment, activeTeamTotalSeries, rightChartTeamEntitySeries, teamById]);
+  }, [activeRankingRow, activeTeamTotalSeries, rightChartTeamEntitySeries, teamById]);
 
   const teamStackSeries = rightChartTeamEntitySeries;
 
@@ -1603,47 +1460,6 @@ export default function TeamBattleView({
   const teamStackValueFormatter = showProjectPercent
     ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
     : formatNumber;
-
-  const preTimelineRepoBattleTotals = useMemo(() => {
-    if (!includePreTimelinePrep) {
-      return null;
-    }
-    const totalsByGroupId = Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [series.id, 0]));
-    for (const node of preTimelineNodes) {
-      if (activeExcludedCommitIds?.has(node.id)) {
-        continue;
-      }
-      const delta = trendDelta(node, metricForTrend, useNetLines);
-      const groupId = classifyRepoBattleGroup(node.repoName);
-      if (groupId && Object.prototype.hasOwnProperty.call(totalsByGroupId, groupId)) {
-        totalsByGroupId[groupId] += delta;
-      }
-    }
-    return totalsByGroupId;
-  }, [
-    includePreTimelinePrep,
-    preTimelineNodes,
-    activeExcludedCommitIds,
-    metricForTrend,
-    useNetLines,
-  ]);
-
-  const repoBattleRows = useMemo(
-    () => buildRepoBattleRows(
-      timelineWindowNodes,
-      metricForTrend,
-      useNetLines,
-      activeExcludedCommitIds,
-      preTimelineRepoBattleTotals
-    ),
-    [
-      timelineWindowNodes,
-      metricForTrend,
-      useNetLines,
-      activeExcludedCommitIds,
-      preTimelineRepoBattleTotals,
-    ]
-  );
 
   const repoBattleSeriesByKey = useMemo(
     () => Object.fromEntries(REPO_BATTLE_SERIES.map((series) => [series.key, series])),
@@ -1778,8 +1594,8 @@ export default function TeamBattleView({
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} ${trendTargetLabel} 기준 배틀 추이`;
 
   const trendDescription = showProjectPercent
-    ? `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 우측 그래프(${rightChartTargetLabel})를 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 우측 그래프(${rightChartTargetLabel})를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
+    ? `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 우측 그래프(${rightChartTargetLabel})를 동시에 비교합니다.`
+    : `시점 다이얼 기준으로 ${trendTargetLabel} 랭킹과 우측 그래프(${rightChartTargetLabel})를 비교합니다.`;
 
   if (loading || fileListLoading) {
     return (
@@ -1948,16 +1764,16 @@ export default function TeamBattleView({
             <Group justify="space-between" align="center" mb={4}>
               <Text size="xs" c="dimmed" tt="uppercase" fw={700}>시점 다이얼</Text>
               <Text size="xs" c="dimmed">
-                {activeMoment?.row ? formatKoreanDateTime(activeMoment.row.timestampMs) : '-'}
+                {activeMoment ? formatKoreanDateTime(activeMoment.timestampMs) : '-'}
               </Text>
             </Group>
             <Slider
               min={0}
-              max={Math.max(0, activeTrendRows.length - 1)}
+              max={Math.max(0, timelineRows.length - 1)}
               step={1}
-              value={activeTrendIndex ?? Math.max(0, activeTrendRows.length - 1)}
+              value={activeTrendIndex ?? Math.max(0, timelineRows.length - 1)}
               onChange={setActiveTrendIndex}
-              disabled={activeTrendRows.length <= 1}
+              disabled={timelineRows.length <= 1}
               color={actionButtonColor}
               label={null}
             />
