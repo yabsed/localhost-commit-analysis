@@ -551,22 +551,85 @@ function toNumericInputValue(rawValue) {
   return String(rawValue);
 }
 
-function TeamTotalTooltip({ active, payload, showPercent = false }) {
+function buildStackValueBounds(rows, series) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(series) || series.length === 0) {
+    return [0, 1];
+  }
+
+  let min = 0;
+  let max = 0;
+
+  for (const row of rows) {
+    let positive = 0;
+    let negative = 0;
+
+    for (const item of series) {
+      const value = Number(row[item.key]) || 0;
+      if (value >= 0) {
+        positive += value;
+      } else {
+        negative += value;
+      }
+    }
+
+    max = Math.max(max, positive);
+    min = Math.min(min, negative);
+  }
+
+  if (min === max) {
+    if (min === 0) {
+      return [0, 1];
+    }
+    return [min - 1, max + 1];
+  }
+
+  return [min, max];
+}
+
+function TeamStackedTooltip({
+  active,
+  payload,
+  label,
+  authorByKey,
+  unitLabel,
+  valueFormatter = formatNumber,
+}) {
   if (!active || !Array.isArray(payload) || payload.length === 0) {
     return null;
   }
 
-  const item = payload[0];
-  const teamLabel = item?.payload?.teamLabel ?? item?.name ?? '-';
-  const value = Number(item?.value) || 0;
-  const valueText = showPercent
-    ? `${value.toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
-    : formatNumber(value);
+  const normalized = payload
+    .filter((item) => {
+      const value = Number(item.value);
+      return Number.isFinite(value) && value !== 0;
+    })
+    .sort((a, b) => Math.abs(Number(b.value)) - Math.abs(Number(a.value)));
+
+  if (normalized.length === 0) {
+    return null;
+  }
 
   return (
     <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
-      <Text size="sm" c="dimmed" mb={4}>{teamLabel}</Text>
-      <Text size="sm" fw={700}>{valueText}</Text>
+      <Text fw={700} mb={6}>{label}</Text>
+      <Stack gap={4}>
+        {normalized.map((item) => {
+          const author = authorByKey[item.dataKey];
+          return (
+            <Group key={`${item.dataKey}-${label}`} justify="space-between" gap="xl">
+              <Group gap={8}>
+                <span
+                  className="swatch"
+                  style={{ backgroundColor: item.color }}
+                  aria-hidden="true"
+                />
+                <Text size="sm">{author?.label ?? item.dataKey}</Text>
+              </Group>
+              <Text size="sm" fw={700}>{valueFormatter(item.value)} {unitLabel}</Text>
+            </Group>
+          );
+        })}
+      </Stack>
     </Paper>
   );
 }
@@ -878,6 +941,11 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [teams]
   );
 
+  const authorByKey = useMemo(
+    () => Object.fromEntries(authorSeries.map((author) => [author.key, author])),
+    [authorSeries]
+  );
+
   const userRankingRows = useMemo(() => {
     const row = activeMoment?.row;
     if (!row) {
@@ -898,29 +966,55 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       .sort((a, b) => b.magnitude - a.magnitude);
   }, [activeMoment, authorSeries, teamById]);
 
-  const teamBarRows = useMemo(() => {
+  const teamStackRows = useMemo(() => {
     const row = activeMoment?.row;
     if (!row) {
       return [];
     }
 
-    return teamTotalSeries.map((item) => {
-      const signedValue = Number(row[item.key]) || 0;
-      return {
-        key: item.key,
-        teamId: item.teamId,
-        teamLabel: teamById.get(item.teamId)?.label ?? item.label,
-        value: signedValue,
-        magnitude: Math.abs(signedValue),
-        stroke: item.stroke,
+    return teams.map((team) => {
+      const stackRow = {
+        teamId: team.id,
+        teamLabel: team.label,
+        total: 0,
       };
+
+      for (const author of authorSeries) {
+        const value = author.teamId === team.id
+          ? (Number(row[author.key]) || 0)
+          : 0;
+        stackRow[author.key] = value;
+        stackRow.total += value;
+      }
+
+      return stackRow;
     });
-  }, [activeMoment, teamTotalSeries, teamById]);
+  }, [activeMoment, teams, authorSeries]);
+
+  const activeTeamAuthors = useMemo(
+    () => authorSeries.filter((author) =>
+      teamStackRows.some((row) => Math.abs(Number(row[author.key]) || 0) > 0)),
+    [authorSeries, teamStackRows]
+  );
+
+  const teamStackSeries = activeTeamAuthors.length > 0 ? activeTeamAuthors : authorSeries;
+
+  const teamStackDomain = useMemo(
+    () => buildStackValueBounds(teamStackRows, teamStackSeries),
+    [teamStackRows, teamStackSeries]
+  );
 
   const hasNegativeTeamValue = useMemo(
-    () => teamBarRows.some((item) => item.value < 0),
-    [teamBarRows]
+    () => teamStackDomain[0] < 0,
+    [teamStackDomain]
   );
+
+  const teamStackUnitLabel = showProjectPercent
+    ? '%'
+    : (metricMode === 'commits' ? 'commit' : (useNetLines ? 'net line' : 'line'));
+  const teamStackValueFormatter = showProjectPercent
+    ? (value) => Number(value || 0).toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+    : formatNumber;
 
   const trendTitle = `${metricMode === 'commits' ? '커밋' : '라인'} 팀+사용자 통합 추이`;
 
@@ -950,7 +1044,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   return (
     <main className="battle-shell">
       <div className="battle-scroll">
-        <Card className="chart-card card-enter delay-2" radius="xl" p="lg" withBorder>
+        <Card className="chart-card battle-main-card card-enter delay-2" radius="xl" p="lg" withBorder>
           <Group justify="space-between" align="flex-start" wrap="wrap">
             <Stack gap="xs">
               <Title order={4}>{trendTitle}</Title>
@@ -1100,28 +1194,29 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
             <Paper withBorder radius="md" p="sm" className="battle-rect-panel">
               <Group justify="space-between" align="center" mb={8}>
                 <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀 막대그래프</Text>
-                <Badge color="gray" variant="light">{teamBarRows.length}개 팀</Badge>
+                <Badge color="gray" variant="light">{teamStackRows.length}개 팀</Badge>
               </Group>
               <div className="battle-team-bar-wrap">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
-                    data={teamBarRows}
+                    data={teamStackRows}
+                    stackOffset="sign"
                     margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                     <XAxis
                       dataKey="teamLabel"
                       interval={0}
-                      height={teamBarRows.length > 6 ? 44 : 26}
-                      angle={teamBarRows.length > 6 ? -18 : 0}
-                      textAnchor={teamBarRows.length > 6 ? 'end' : 'middle'}
+                      height={teamStackRows.length > 6 ? 44 : 26}
+                      angle={teamStackRows.length > 6 ? -18 : 0}
+                      textAnchor={teamStackRows.length > 6 ? 'end' : 'middle'}
                       tick={{ fill: chartTickColor, fontSize: 11 }}
                       axisLine={{ stroke: chartAxisStroke }}
                       tickLine={{ stroke: chartAxisStroke }}
                     />
                     <YAxis
                       allowDecimals={showProjectPercent}
-                      domain={hasNegativeTeamValue ? ['auto', 'auto'] : [0, 'auto']}
+                      domain={teamStackDomain}
                       tickFormatter={
                         showProjectPercent
                           ? (value) => `${Math.round(Number(value) || 0)}%`
@@ -1134,16 +1229,30 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                     {(useNetLines || hasNegativeTeamValue) && (
                       <ReferenceLine y={0} stroke={chartReferenceStroke} strokeDasharray="4 4" />
                     )}
-                    <Tooltip content={<TeamTotalTooltip showPercent={showProjectPercent} />} />
-                    <Bar dataKey="value">
-                      {teamBarRows.map((item) => (
-                        <Cell
-                          key={`team-total-bar-${item.teamId}`}
-                          fill={item.stroke}
-                          fillOpacity={item.magnitude > 0 ? 1 : 0.45}
+                    <Tooltip
+                      content={
+                        <TeamStackedTooltip
+                          authorByKey={authorByKey}
+                          unitLabel={teamStackUnitLabel}
+                          valueFormatter={teamStackValueFormatter}
                         />
-                      ))}
-                    </Bar>
+                      }
+                    />
+                    {teamStackSeries.map((author) => (
+                      <Bar
+                        key={`team-stack-${author.key}`}
+                        dataKey={author.key}
+                        stackId={metricMode}
+                        fill={author.stroke}
+                      >
+                        {teamStackRows.map((row, index) => (
+                          <Cell
+                            key={`${author.key}-${row?.teamId ?? index}`}
+                            radius={[4, 4, 4, 4]}
+                          />
+                        ))}
+                      </Bar>
+                    ))}
                   </BarChart>
                 </ResponsiveContainer>
               </div>

@@ -1,60 +1,81 @@
-import { useState } from 'react';
-import { ActionIcon, Menu } from '@mantine/core';
-import { IconCheck, IconLayoutGrid, IconMenu2, IconSwords } from '@tabler/icons-react';
+import { useEffect, useState } from 'react';
 import TeamBattleView from './TeamBattleView';
 import TeamReviewView from './TeamReviewView';
 
+const TEAM_BATTLE_PATHS = new Set(['/battle', '/team-battle']);
+
+function normalizePath(pathValue = '') {
+  const source = String(pathValue || '').trim();
+  if (!source) {
+    return '/';
+  }
+  const withSlash = source.startsWith('/') ? source : `/${source}`;
+  const trimmed = withSlash.replace(/\/+$/, '');
+  return trimmed || '/';
+}
+
+function resolveRelativePathname(pathname = '') {
+  const base = normalizePath(import.meta.env.BASE_URL || '/');
+  const normalizedPathname = normalizePath(pathname);
+  if (base === '/' || !normalizedPathname.startsWith(base)) {
+    return normalizedPathname;
+  }
+  const relative = normalizedPathname.slice(base.length);
+  return normalizePath(relative);
+}
+
+function resolveViewModeFromLocation() {
+  if (typeof window === 'undefined') {
+    return 'teamReview';
+  }
+
+  const hashSource = String(window.location.hash || '').replace(/^#/, '');
+  const hashPath = normalizePath(hashSource);
+  if (TEAM_BATTLE_PATHS.has(hashPath)) {
+    return 'teamBattle';
+  }
+
+  const relativePath = resolveRelativePathname(window.location.pathname || '/');
+  if (TEAM_BATTLE_PATHS.has(relativePath)) {
+    return 'teamBattle';
+  }
+
+  return 'teamReview';
+}
+
 export default function App({ colorScheme = 'light', onToggleColorScheme = () => {} }) {
-  const [viewMode, setViewMode] = useState('teamReview');
-  const isDarkMode = colorScheme === 'dark';
+  const [viewMode, setViewMode] = useState(resolveViewModeFromLocation);
+
+  useEffect(() => {
+    const applyFromLocation = () => {
+      setViewMode(resolveViewModeFromLocation());
+    };
+
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    window.addEventListener('popstate', applyFromLocation);
+    window.addEventListener('hashchange', applyFromLocation);
+    return () => {
+      window.removeEventListener('popstate', applyFromLocation);
+      window.removeEventListener('hashchange', applyFromLocation);
+    };
+  }, []);
 
   return (
-    <>
-      {viewMode === 'teamReview' ? (
-        <TeamReviewView
-          colorScheme={colorScheme}
-          onToggleColorScheme={onToggleColorScheme}
-        />
-      ) : (
+    viewMode === 'teamBattle'
+      ? (
         <TeamBattleView
           colorScheme={colorScheme}
           onToggleColorScheme={onToggleColorScheme}
         />
-      )}
-
-      <div className="view-menu-fab">
-        <Menu shadow="md" width={190} position="bottom-end" withArrow>
-          <Menu.Target>
-            <ActionIcon
-              className="view-menu-trigger"
-              size={46}
-              radius="xl"
-              variant="filled"
-              color={isDarkMode ? 'gray' : 'dark'}
-              aria-label="화면 메뉴"
-            >
-              <IconMenu2 size={20} />
-            </ActionIcon>
-          </Menu.Target>
-          <Menu.Dropdown>
-            <Menu.Label>화면 전환</Menu.Label>
-            <Menu.Item
-              leftSection={<IconLayoutGrid size={16} />}
-              rightSection={viewMode === 'teamReview' ? <IconCheck size={14} /> : null}
-              onClick={() => setViewMode('teamReview')}
-            >
-              팀별 리뷰
-            </Menu.Item>
-            <Menu.Item
-              leftSection={<IconSwords size={16} />}
-              rightSection={viewMode === 'teamBattle' ? <IconCheck size={14} /> : null}
-              onClick={() => setViewMode('teamBattle')}
-            >
-              팀간 배틀
-            </Menu.Item>
-          </Menu.Dropdown>
-        </Menu>
-      </div>
-    </>
+      )
+      : (
+        <TeamReviewView
+          colorScheme={colorScheme}
+          onToggleColorScheme={onToggleColorScheme}
+        />
+      )
   );
 }

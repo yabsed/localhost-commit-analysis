@@ -82,18 +82,6 @@ body {
   padding: var(--app-pad);
 }
 
-.view-menu-fab {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  z-index: 2600;
-}
-
-.view-menu-trigger {
-  box-shadow: var(--shadow);
-  border: 1px solid var(--panel-border);
-}
-
 .battle-shell {
   width: 100%;
   height: 100%;
@@ -108,6 +96,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.battle-main-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .battle-metrics {
@@ -133,15 +128,21 @@ body {
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 12px;
   align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .battle-ranking-panel,
 .battle-rect-panel {
-  height: var(--chart-height);
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .battle-ranking-list {
-  height: calc(100% - 30px);
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding-right: 4px;
 }
@@ -175,7 +176,8 @@ body {
 
 .battle-team-bar-wrap {
   width: 100%;
-  height: calc(100% - 30px);
+  flex: 1;
+  min-height: 0;
 }
 
 .left-pane,
@@ -505,7 +507,7 @@ body {
 
   .battle-ranking-panel,
   .battle-rect-panel {
-    height: clamp(220px, 34vh, 280px);
+    min-height: clamp(220px, 34vh, 280px);
   }
 
 }
