@@ -455,13 +455,17 @@ function buildTeamRows(
   metric,
   subtractDeletions = false,
   showPercent = false,
-  excludedCommitIds = null
+  excludedCommitIds = null,
+  initialTotalsByTeamId = null
 ) {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     return [];
   }
 
-  const totalsByTeamId = Object.fromEntries(teamTotalSeries.map((series) => [series.id, 0]));
+  const totalsByTeamId = Object.fromEntries(teamTotalSeries.map((series) => [
+    series.id,
+    Number(initialTotalsByTeamId?.[series.id]) || 0,
+  ]));
 
   return nodes.map((node, index) => {
     if (!excludedCommitIds?.has(node.id)) {
@@ -505,13 +509,17 @@ function buildAuthorRows(
   metric,
   subtractDeletions = false,
   showPercent = false,
-  excludedCommitIds = null
+  excludedCommitIds = null,
+  initialTotalsByAuthorKey = null
 ) {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     return [];
   }
 
-  const totalsByAuthorKey = Object.fromEntries(authorSeries.map((series) => [series.key, 0]));
+  const totalsByAuthorKey = Object.fromEntries(authorSeries.map((series) => [
+    series.key,
+    Number(initialTotalsByAuthorKey?.[series.key]) || 0,
+  ]));
 
   return nodes.map((node, index) => {
     if (!excludedCommitIds?.has(node.id)) {
@@ -754,6 +762,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
   const showTeamAreaPercent = true;
+  const [includePreTimelinePrep, setIncludePreTimelinePrep] = useState(false);
   const [excludeTopLongCommits, setExcludeTopLongCommits] = useState(false);
   const [excludeZeroLengthCommit, setExcludeZeroLengthCommit] = useState(false);
   const [subtractDeletions, setSubtractDeletions] = useState(false);
@@ -967,6 +976,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     return excluded;
   }, [excludeTopLongCommits, excludeZeroLengthCommit, topLongestCommitIds, zeroLengthCommitIds]);
 
+  const metricForTrend = metricMode === 'commits' ? 'commits' : 'code';
+  const useNetLines = metricMode === 'lines' && subtractDeletions;
+
   const timelineWindowNodes = useMemo(
     () => nodes.filter((node) => {
       const timestampMs = Number(node.timestampMs) || 0;
@@ -975,19 +987,63 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [nodes]
   );
 
-  const activeTeamIdsInWindow = useMemo(() => {
-    const ids = new Set();
-    for (const node of timelineWindowNodes) {
+  const preTimelineNodes = useMemo(
+    () => nodes.filter((node) => (Number(node.timestampMs) || 0) < BATTLE_TIMELINE_START_MS),
+    [nodes]
+  );
+
+  const preTimelineTeamTotals = useMemo(() => {
+    if (!includePreTimelinePrep) {
+      return null;
+    }
+
+    const totalsByTeamId = Object.fromEntries(teamTotalSeries.map((series) => [series.id, 0]));
+    for (const node of preTimelineNodes) {
       if (activeExcludedCommitIds?.has(node.id)) {
         continue;
       }
-      ids.add(node.teamId);
+      const delta = trendDelta(node, metricForTrend, useNetLines);
+      if (Object.prototype.hasOwnProperty.call(totalsByTeamId, node.teamId)) {
+        totalsByTeamId[node.teamId] += delta;
+      }
     }
-    return ids;
-  }, [timelineWindowNodes, activeExcludedCommitIds]);
+    return totalsByTeamId;
+  }, [
+    includePreTimelinePrep,
+    teamTotalSeries,
+    preTimelineNodes,
+    activeExcludedCommitIds,
+    metricForTrend,
+    useNetLines,
+  ]);
 
-  const metricForTrend = metricMode === 'commits' ? 'commits' : 'code';
-  const useNetLines = metricMode === 'lines' && subtractDeletions;
+  const preTimelineAuthorTotals = useMemo(() => {
+    if (!includePreTimelinePrep) {
+      return null;
+    }
+
+    const totalsByAuthorKey = Object.fromEntries(authorSeries.map((series) => [series.key, 0]));
+    for (const node of preTimelineNodes) {
+      if (activeExcludedCommitIds?.has(node.id)) {
+        continue;
+      }
+      const authorKey = authorKeyById.get(node.authorId);
+      if (!authorKey || !Object.prototype.hasOwnProperty.call(totalsByAuthorKey, authorKey)) {
+        continue;
+      }
+      const delta = trendDelta(node, metricForTrend, useNetLines);
+      totalsByAuthorKey[authorKey] += delta;
+    }
+    return totalsByAuthorKey;
+  }, [
+    includePreTimelinePrep,
+    authorSeries,
+    authorKeyById,
+    preTimelineNodes,
+    activeExcludedCommitIds,
+    metricForTrend,
+    useNetLines,
+  ]);
 
   const teamRows = useMemo(
     () => buildTeamRows(
@@ -996,7 +1052,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       metricForTrend,
       useNetLines,
       showProjectPercent,
-      activeExcludedCommitIds
+      activeExcludedCommitIds,
+      preTimelineTeamTotals
     ),
     [
       timelineWindowNodes,
@@ -1005,6 +1062,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       useNetLines,
       showProjectPercent,
       activeExcludedCommitIds,
+      preTimelineTeamTotals,
     ]
   );
 
@@ -1016,7 +1074,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       metricForTrend,
       useNetLines,
       showProjectPercent,
-      activeExcludedCommitIds
+      activeExcludedCommitIds,
+      preTimelineAuthorTotals
     ),
     [
       timelineWindowNodes,
@@ -1026,6 +1085,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
       useNetLines,
       showProjectPercent,
       activeExcludedCommitIds,
+      preTimelineAuthorTotals,
     ]
   );
 
@@ -1098,9 +1158,20 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
     [teams]
   );
 
+  const activeTeamIds = useMemo(() => {
+    const ids = new Set();
+    for (const series of teamTotalSeries) {
+      const hasValue = teamRows.some((row) => Math.abs(Number(row[series.key]) || 0) > 0);
+      if (hasValue) {
+        ids.add(series.teamId);
+      }
+    }
+    return ids;
+  }, [teamRows, teamTotalSeries]);
+
   const activeTeamTotalSeries = useMemo(
-    () => teamTotalSeries.filter((series) => activeTeamIdsInWindow.has(series.teamId)),
-    [teamTotalSeries, activeTeamIdsInWindow]
+    () => teamTotalSeries.filter((series) => activeTeamIds.has(series.teamId)),
+    [teamTotalSeries, activeTeamIds]
   );
 
   const authorByKey = useMemo(
@@ -1124,9 +1195,9 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
           magnitude: Math.abs(signedValue),
         };
       })
-      .filter((item) => item.magnitude > 0 && activeTeamIdsInWindow.has(item.teamId))
+      .filter((item) => item.magnitude > 0 && activeTeamIds.has(item.teamId))
       .sort((a, b) => b.magnitude - a.magnitude);
-  }, [activeMoment, authorSeries, teamById, activeTeamIdsInWindow]);
+  }, [activeMoment, authorSeries, teamById, activeTeamIds]);
 
   const teamStackRows = useMemo(() => {
     const row = activeMoment?.row;
@@ -1154,8 +1225,8 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
   }, [activeMoment, activeTeamTotalSeries, authorSeries, teamById]);
 
   const activeTeamAuthors = useMemo(
-    () => authorSeries.filter((author) => activeTeamIdsInWindow.has(author.teamId)),
-    [authorSeries, activeTeamIdsInWindow]
+    () => authorSeries.filter((author) => activeTeamIds.has(author.teamId)),
+    [authorSeries, activeTeamIds]
   );
 
   const teamStackSeries = activeTeamAuthors;
@@ -1277,7 +1348,7 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
 
   const trendDescription = showProjectPercent
     ? `시점 다이얼 기준으로 사용자 랭킹과 팀/사용자 점유율(%)을 동시에 비교합니다. (${dialWindowText})`
-    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 팀별 영역 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 영역: 전체 대비(%))`;
+    : `시점 다이얼 기준으로 사용자 랭킹, 팀별 막대 + 팀별 영역 그래프를 비교합니다. (${useNetLines ? '순변경' : '총변경'}, ${dialWindowText}, 영역: 전체 대비(%), 준비물: ${includePreTimelinePrep ? '포함' : '미포함'})`;
 
   if (loading || fileListLoading) {
     return (
@@ -1369,6 +1440,14 @@ export default function TeamBattleView({ colorScheme = 'light' }) {
                 checked={linkedMetricOptionChecked}
                 onChange={(event) => setLinkedMetricOptionChecked(event.currentTarget.checked)}
                 label={metricMode === 'commits' ? '0줄 변경 커밋 제외' : '순변경으로 계산(+/-)'}
+              />
+              <Checkbox
+                size="sm"
+                color={actionButtonColor}
+                radius={0}
+                checked={includePreTimelinePrep}
+                onChange={(event) => setIncludePreTimelinePrep(event.currentTarget.checked)}
+                label="오후 3시 이전 준비물 포함"
               />
             </Group>
           </div>
