@@ -7,7 +7,7 @@
     "dev": "vite",
     "prepare:data": "node scripts/prepare-static-data.mjs",
     "build": "npm run prepare:data && vite build",
-    "build:pages": "npm run prepare:data && vite build --base=/localhost-commit-analysis/",
+    "build:pages": "npm run prepare:data && vite build --base=/localhost-commit-analysis/ && cp dist/index.html dist/404.html",
     "preview": "vite preview"
   },
   "dependencies": {
