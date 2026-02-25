@@ -10,7 +10,6 @@ import {
   Modal,
   NumberInput,
   Paper,
-  Select,
   SegmentedControl,
   Slider,
   Stack,
@@ -79,12 +78,6 @@ const REPO_BATTLE_SERIES = [
   },
 ];
 const DEFAULT_REPO_LINE_LIMIT = 8;
-const RIGHT_CHART_MODE_OPTIONS = [
-  { value: 'user_rank', label: '사용자 순위' },
-  { value: 'team_rank', label: '팀별 순위' },
-  { value: 'overall_rank', label: '레포 순위' },
-  { value: 'repo_battle', label: '프런트 vs 백엔드' },
-];
 const RIGHT_CHART_RANK_LABEL_BY_MODE = {
   user_rank: '사용자 순위',
   team_rank: '팀별 순위',
@@ -1019,7 +1012,9 @@ export default function TeamBattleView({
   const [removedTeamIds, setRemovedTeamIds] = useState(DEFAULT_REMOVED_TEAM_IDS);
 
   const [entityMode, setEntityMode] = useState('repo');
-  const [rightChartMode, setRightChartMode] = useState('overall_rank');
+  const rightChartMode = entityMode === 'user'
+    ? 'user_rank'
+    : (entityMode === 'team' ? 'team_rank' : 'overall_rank');
   const [repoRankLineInput, setRepoRankLineInput] = useState(`+${DEFAULT_REPO_LINE_LIMIT}`);
   const [metricMode, setMetricMode] = useState('commits');
   const showProjectPercent = false;
@@ -1911,26 +1906,6 @@ export default function TeamBattleView({
               <Group justify="space-between" align="center" mb={8}>
                 <Text size="xs" c="dimmed" tt="uppercase" fw={700}>팀 막대/꺾은선 그래프</Text>
                 <Group gap={8} wrap="nowrap">
-                  <Select
-                    size="xs"
-                    w={180}
-                    data={RIGHT_CHART_MODE_OPTIONS}
-                    value={rightChartMode}
-                    onChange={(value) => {
-                      if (
-                        value === 'user_rank'
-                        || value === 'team_rank'
-                        || value === 'overall_rank'
-                        || value === 'repo_battle'
-                      ) {
-                        setRightChartMode(value);
-                        return;
-                      }
-                      setRightChartMode('overall_rank');
-                    }}
-                    allowDeselect={false}
-                    aria-label="우측 그래프 기준"
-                  />
                   {!isRepoBattleMode && (
                     <TextInput
                       size="xs"
