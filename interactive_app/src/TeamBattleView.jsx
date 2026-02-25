@@ -907,6 +907,8 @@ function TeamLineTooltip({
   seriesByKey,
   valueFormatter = formatNumber,
   showPercent = false,
+  focusedSeriesKey = null,
+  ownerOnly = false,
 }) {
   if (!active || !Array.isArray(payload) || payload.length === 0) {
     return null;
@@ -920,12 +922,45 @@ function TeamLineTooltip({
     return null;
   }
   const tooltipLabel = normalized[0]?.payload?.shortLabel ?? normalized[0]?.payload?.label ?? label;
+  const focusedItem = focusedSeriesKey
+    ? normalized.find((item) => item.dataKey === focusedSeriesKey)
+    : null;
+
+  if (ownerOnly && focusedSeriesKey && !focusedItem) {
+    return null;
+  }
+
+  const visibleItems = focusedItem ? [focusedItem] : normalized;
+
+  if (ownerOnly) {
+    const ownerItem = visibleItems[0];
+    const ownerSeries = ownerItem ? seriesByKey[ownerItem.dataKey] : null;
+    const ownerValue = Number(ownerItem?.value) || 0;
+    const ownerValueText = showPercent
+      ? `${ownerValue.toLocaleString('ko-KR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`
+      : valueFormatter(ownerValue);
+    return (
+      <Paper shadow="md" radius="md" p="xs" withBorder className="chart-tooltip">
+        <Text size="xs" fw={700} mb={4}>{tooltipLabel}</Text>
+        <Group gap={6} wrap="nowrap">
+          <span
+            className="swatch"
+            style={{ backgroundColor: ownerItem?.color }}
+            aria-hidden="true"
+          />
+          <Text size="xs">
+            {ownerSeries?.label ?? ownerItem?.name ?? ownerItem?.dataKey} ({ownerValueText})
+          </Text>
+        </Group>
+      </Paper>
+    );
+  }
 
   return (
     <Paper shadow="md" radius="md" p="sm" withBorder className="chart-tooltip">
       <Text fw={700} mb={6}>{tooltipLabel}</Text>
       <Stack gap={4}>
-        {normalized.map((item) => {
+        {visibleItems.map((item) => {
           const series = seriesByKey[item.dataKey];
           const value = Number(item.value) || 0;
           const valueText = showPercent
@@ -996,6 +1031,7 @@ export default function TeamBattleView({
     String(DEFAULT_TOP_LONG_COMMIT_PERCENT)
   );
   const [activeTrendIndex, setActiveTrendIndex] = useState(null);
+  const [hoveredRankAreaKey, setHoveredRankAreaKey] = useState(null);
 
   const linkedMetricOptionChecked = metricMode === 'commits'
     ? excludeZeroLengthCommit
@@ -1991,7 +2027,7 @@ export default function TeamBattleView({
                       <Text size="xs" c="dimmed" fw={700}>{lineChartTitle}</Text>
                       <Text size="xs" c="dimmed">{lineChartHint}</Text>
                     </Group>
-                    <SeriesLegendBoxes series={lineChartSeries} />
+                    {isRepoBattleMode && <SeriesLegendBoxes series={lineChartSeries} />}
                     {!hasLineChartData ? (
                       <Text size="sm" c="dimmed">{lineChartEmptyText}</Text>
                     ) : (
@@ -2001,6 +2037,7 @@ export default function TeamBattleView({
                             <AreaChart
                               data={lineChartRows}
                               margin={{ top: 8, right: 10, left: 0, bottom: 2 }}
+                              onMouseLeave={() => setHoveredRankAreaKey(null)}
                             >
                               <CartesianGrid strokeDasharray="3 3" stroke={chartGridStroke} />
                               <XAxis
@@ -2032,6 +2069,8 @@ export default function TeamBattleView({
                                     seriesByKey={lineChartSeriesByKey}
                                     valueFormatter={lineChartValueFormatter}
                                     showPercent
+                                    focusedSeriesKey={hoveredRankAreaKey}
+                                    ownerOnly
                                   />
                                 }
                               />
@@ -2046,8 +2085,10 @@ export default function TeamBattleView({
                                   fillOpacity={0.16}
                                   strokeWidth={2}
                                   dot={false}
-                                  activeDot={{ r: 4 }}
+                                  activeDot={false}
                                   isAnimationActive={false}
+                                  onMouseEnter={() => setHoveredRankAreaKey(series.key)}
+                                  onMouseLeave={() => setHoveredRankAreaKey(null)}
                                 />
                               ))}
                             </AreaChart>
@@ -2097,7 +2138,7 @@ export default function TeamBattleView({
                                   stroke={series.stroke}
                                   strokeWidth={2}
                                   dot={false}
-                                  activeDot={{ r: 4 }}
+                                  activeDot={false}
                                   isAnimationActive={false}
                                 />
                               ))}
